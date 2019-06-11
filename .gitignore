@@ -1,0 +1,9 @@
+# Data
+*.csv
+*.npy
+# Logs
+*ipynb_checkpoints
+*archived
+*__pycache__
+# Temp
+*Untitled.ipynb
