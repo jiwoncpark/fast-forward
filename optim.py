@@ -1,7 +1,9 @@
-import torch
+import os
 import numpy as np
+import torch
 from torch import optim
 from torch.autograd import Variable
+from torch.nn.utils import clip_grad_norm_
 
 def checkpoint_val(model, val_loader, n_val, device):
     val_loss = 0
@@ -16,11 +18,13 @@ def checkpoint_val(model, val_loader, n_val, device):
     val_loss /= n_val
     return val_loss
 
-def fit_model(model, n_epochs, train_loader, val_loader, n_val, device, logging_interval, X_val, Y_val, n_MC, verbose=True):
+def fit_model(model, n_epochs, train_loader, val_loader, n_val, device, logging_interval, X_val, Y_val, n_MC, run_id, verbose=True):
     model = model.to(device)
-    optimizer = optim.Adam(model.parameters())
+    optimizer = optim.Adam(params=model.parameters(), lr=5e-4)
     
-    pppp = []
+    if not os.path.exists('checkpoint'):
+        os.makedirs('checkpoint')
+    pppp = [] # per point predictive probability
     rmse = []
     
     for i in range(n_epochs):
@@ -33,23 +37,27 @@ def fit_model(model, n_epochs, train_loader, val_loader, n_val, device, logging_
             
             optimizer.zero_grad()
             loss.backward()
+            
+            #clip_grad_norm_(model.parameters(), 0.02)
+            #for p in model.parameters():
+            #    p.data.add_(-1e-4, p.grad.data)
+            
             optimizer.step()
         
         if (i+1)%(logging_interval) == 0:
-            p, r = test(model, X_val, Y_val, n_MC, device)
-            pppp.append(p)
-            rmse.append(r)
-            print("Epoch %d done" %(i+1))
-            """
             with torch.no_grad():
-                val_loss = checkpoint_val(model, val_loader, n_val, device)    
-            val_curve.append(val_loss.item())
-            """
+                p, r = test(model, X_val, Y_val, n_MC, device)
+                pppp.append(p)
+                rmse.append(r)
+            print("Epoch %d done" %(i+1))
+            
+    torch.save(model.state_dict(), 'checkpoint/weights_%d.pth' %run_id)
+
     return model, pppp, rmse
 
 def heteroscedastic_loss(true, mean, log_var):
     precision = torch.exp(-log_var)
-    return torch.mean(torch.sum(precision * (true - mean)**2 + log_var, dim=1), dim=0)
+    return torch.mean(torch.sum(precision * (true - mean)**2.0 + log_var, dim=1), dim=0)
 
 def logsumexp(a):
     a_max = a.max(axis=0)
