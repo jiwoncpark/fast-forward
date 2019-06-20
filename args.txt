@@ -1,1 +1,1 @@
-{"train_frac": 0.9, "n_epochs": 100, "lr": 0.0005, "data_path": "obj_master.csv", "n_MC": 20, "n_features": 256, "batch_size": 1000, "l": 0.0001, "run_id": 1, "logging_interval": 10, "verbose": true}
+{"train_frac": 0.9, "n_epochs": 20, "lr": 0.0005, "n_MC": 40, "n_features": 1024, "batch_size": 1000, "l": 0.0001, "run_id": 1, "logging_interval": 2, "verbose": true}
