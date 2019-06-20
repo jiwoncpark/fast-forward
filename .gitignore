@@ -12,6 +12,7 @@ raw_data/*
 # Checkpoints
 *__pycache__
 *.pth
+checkpoints/*
 
 # Temp
 *Untitled.ipynb
