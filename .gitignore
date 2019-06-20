@@ -1,10 +1,16 @@
 # Data
 *.csv
 *.npy
+data/*
+results/*
+raw_data/*
+
 # Logs
 *ipynb_checkpoints
 *archived
 *__pycache__
+checkpoints/*
+
 # Temp
 *Untitled.ipynb
 *~
