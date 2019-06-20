@@ -4,7 +4,8 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset
 from sklearn.preprocessing import StandardScaler
-import units_utils as units
+import units_utils as units # FIXME: may not be used
+import astropy.units as u
 
 class DerpData(Dataset):
     """Preprocessed and unnormalized Derp dataset."""
@@ -66,12 +67,13 @@ class DerpData(Dataset):
         _, self.Y_dim = self.Y.shape
         
         # Categorical data
-        self.X_cat_cols = [self.X_col_map['star']]
+        self.X_cat_cols = [self.X_col_map['star'],]
         self.X_cat_mapping = dict(zip(self.X_cols, range(len(self.X_cols))))
         
         # Normalize features
         self.trainval_indices, self.train_indices, self.val_indices, self.n_train = self.split_train_val()
-        self.normalize_XY(exclude_X_cols=self.X_cat_cols, normalize_Y=True)
+        self.n_val = self.n_trainval - self.n_train
+        self.normalize_XY(exclude_X_cols=self.X_cat_cols + [], normalize_Y=True)
         
         # Save processed data to disk
         if self.save_to_disk:
@@ -92,21 +94,26 @@ class DerpData(Dataset):
         sample_Y  = self.Y[idx, :]
         return sample_X, sample_Y
     
-    def export_metadata_for_eval(self):
+    def export_metadata_for_eval(self, device_type):
         import json
         
-        eval_metadata = {
-                        'X_cat_cols': self.X_cat_cols,
-                        'X_cols': self.X_cols,
-                        'Y_cols': self.Y_cols,
-                        'val_indices': self.val_indices.tolist(),
-                        'X_mean': self.X_mean.tolist(),
-                        'Y_mean': self.Y_mean.tolist(),
-                        'X_std': self.X_std.tolist(),
-                        'Y_std': self.Y_std.tolist(),}
+        data_meta = {
+                    'device_type': device_type,
+                    'X_dim': self.X_dim,
+                    'Y_dim': self.Y_dim,
+                    'n_val': self.n_val,
+                    'n_train': self.n_train,
+                    'X_cat_cols': self.X_cat_cols,
+                    'X_cols': self.X_cols,
+                    'Y_cols': self.Y_cols,                        
+                    'val_indices': self.val_indices.tolist(),
+                    'X_mean': self.X_mean.tolist(),
+                    'Y_mean': self.Y_mean.tolist(),
+                    'X_std': self.X_std.tolist(),
+                    'Y_std': self.Y_std.tolist(),}
         
-        with open('eval_metadata.txt', 'w') as fp:
-            json.dump(eval_metadata, fp)
+        with open('data_meta.txt', 'w') as fp:
+            json.dump(data_meta, fp)
     
     def engineer_XY(self):
         """Engineer features in input X and label Y
@@ -123,7 +130,7 @@ class DerpData(Dataset):
         # Turn fluxes into magnitudes
         for mag_name in ['u', 'g', 'r', 'i', 'z', 'y_truth']: #FIXME: suffixing for y
             mag = self.X[mag_name].values
-            flux = units.mag_to_flux(mag, to_unit='nMgy')
+            flux = (mag * u.ABmag).to(u.nJy)
             flux_name = mag_name + '_flux'
             self.X[flux_name] = flux
             self.X_col_map[mag_name] = flux_name
@@ -206,8 +213,8 @@ class DerpData(Dataset):
         X_val = self.X.iloc[self.val_indices, :].copy()
         X_mean = X_train.mean()
         X_std = X_train.std()
-        X_mean[exclude_X_cols] = 0.0
-        X_std[exclude_X_cols] = 1.0
+        X_mean.loc[exclude_X_cols] = 0.0
+        X_std.loc[exclude_X_cols] = 1.0
         self.X_mean = X_mean
         self.X_std = X_std
         self.X.iloc[self.train_indices, :] = (X_train - self.X_mean)/self.X_std
@@ -218,12 +225,12 @@ class DerpData(Dataset):
             Y_val = self.Y.iloc[self.val_indices, :].copy()
             Y_mean = Y_train.mean()
             Y_std = Y_train.std()
-            Y_mean[exclude_Y_cols] = 0.0
-            Y_std[exclude_Y_cols] = 1.0
+            Y_mean.loc[exclude_Y_cols] = 0.0
+            Y_std.loc[exclude_Y_cols] = 1.0
             self.Y_mean = Y_mean
             self.Y_std = Y_std
-            self.Y.loc[self.train_indices, :] = (Y_train - self.Y_mean)/self.Y_std
-            self.Y.loc[self.val_indices, :] = (Y_val - self.Y_mean)/self.Y_std
+            self.Y.iloc[self.train_indices, :] = (Y_train - self.Y_mean)/self.Y_std
+            self.Y.iloc[self.val_indices, :] = (Y_val - self.Y_mean)/self.Y_std
 
         if self.verbose:
             print("Standardized X except: ", exclude_X_cols)

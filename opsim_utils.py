@@ -79,6 +79,7 @@ def join_src_opsim(src_df, opsim_df, save_path=None):
     src_cols = src_df.columns.values
     metadata = {'opsim_cols': opsim_cols, 'src_cols': src_cols}
     joined = src_df.merge(opsim_df, how='inner', left_on=['visit', 'filter'], right_on=['obsHistID', 'filter'], validate='m:1')
+    joined['n_obs'] = joined['objectId'].map(joined['objectId'].value_counts()) # Number of visits for each object
     if save_path is not None:
         joined.to_csv(save_path, index=False)
     return joined, metadata
@@ -101,7 +102,7 @@ def join_obj_opsim(obj_df, src_opsim_df, save_path=None):
     DataFrame of Source catalog joined with the OpSim DB and a dictionary
     containing column names from OpSim and Source catalogs
     """
-    opsim_avg_cols = ['m5_flux', 'PSF_sigma2', 'filtSkyBrightness_flux', 'airmass', 'dist2Moon']
+    opsim_avg_cols = ['m5_flux', 'PSF_sigma2', 'filtSkyBrightness_flux', 'airmass', 'dist2Moon', 'n_obs']
     avg_opsim = src_opsim_df.groupby(['objectId'], as_index=False)[opsim_avg_cols].mean()
     
     obj_cols = obj_df.columns.values
