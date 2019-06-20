@@ -8,8 +8,10 @@ raw_data/*
 # Logs
 *ipynb_checkpoints
 *archived
+
+# Checkpoints
 *__pycache__
-checkpoints/*
+*.pth
 
 # Temp
 *Untitled.ipynb
