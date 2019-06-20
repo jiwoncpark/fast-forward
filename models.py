@@ -67,15 +67,16 @@ class ConcreteDense(nn.Module):
         self.conc_drop_logvar = ConcreteDropout(weight_regularizer=weight_regularizer,
                                                  dropout_regularizer=dropout_regularizer)
         self.relu = nn.ReLU()
+        self.tanh = nn.Tanh()
         
     def forward(self, x):
         regularization = torch.empty(5, device=x.device)
         
-        x1, regularization[0] = self.conc_drop1(x, nn.Sequential(self.linear1, self.relu))
-        x2, regularization[1] = self.conc_drop2(x1, nn.Sequential(self.linear2, self.relu))
-        x3, regularization[2] = self.conc_drop3(x2, nn.Sequential(self.linear3, self.relu))
-
+        x1, regularization[0] = self.conc_drop1(x, nn.Sequential(self.linear1, self.tanh))
+        x2, regularization[1] = self.conc_drop2(x1, nn.Sequential(self.linear2, self.tanh))
+        x3, regularization[2] = self.conc_drop3(x2, nn.Sequential(self.linear3, self.tanh))
         mean, regularization[3] = self.conc_drop_mu(x3, self.linear4_mu) # ~ [batch, Y_dim]
+        
         log_var, regularization[4] = self.conc_drop_logvar(x3, self.linear4_logvar) # ~ [batch, Y_dim] 
         
         return mean, log_var, regularization.sum()
