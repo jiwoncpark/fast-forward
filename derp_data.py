@@ -130,7 +130,7 @@ class DerpData(Dataset):
         # Turn fluxes into magnitudes
         for mag_name in ['u', 'g', 'r', 'i', 'z', 'y_truth']: #FIXME: suffixing for y
             mag = self.X[mag_name].values
-            flux = (mag * u.ABmag).to(u.nJy)
+            flux = (mag * u.ABmag).to_value(u.nJy)
             flux_name = mag_name + '_flux'
             self.X[flux_name] = flux
             self.X_col_map[mag_name] = flux_name
