@@ -1,4 +1,12 @@
 import numpy as np
+import astropy.units as u
+
+def nmgy_to_njy(from_flux, inv=False):
+    nmgy_to_njy = 3613.0 # 1 nMgy = 3.613e-6 Jy = 3613 nJy
+    if inv: # njy --> nmgy
+        return from_flux*nmgy_to_njy
+    else: # nmgy --> njy
+        return from_flux/nmgy_to_njy
 
 def flux_to_mag(flux, zeropoint_mag=0.0, from_unit=None, to_unit=None):
     if from_unit=='nMgy':
