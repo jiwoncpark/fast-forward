@@ -1,36 +1,35 @@
 import os
 import numpy as np
 import torch
-from torch import optim
 from torch.autograd import Variable
 from torch.nn.utils import clip_grad_norm_
 from logger import Logger # for tensorboard logging
 
-def checkpoint_val(model, val_loader, n_val, device):
-    val_loss = 0
-    for X_val_, Y_val_ in val_loader:
-        X_val_batch = Variable(torch.FloatTensor(X_val_)).to(device)
-        Y_val_batch = Variable(torch.FloatTensor(Y_val_)).to(device)
-        
-        mean, log_var, regularization = model(X_val_batch)
-        val_batch_size = Y_val_.shape[0]
-        batch_loss = heteroscedastic_loss(Y_val_batch, mean, log_var) + regularization
-        val_loss += val_batch_size*batch_loss
-    val_loss /= n_val
-    return val_loss
+def load_checkpoint(model, optimizer, checkpoint_path):
+    print("Loading checkpoint at %s..." %checkpoint_path)
+    checkpoint = torch.load(checkpoint_path)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    epoch = checkpoint['epoch']
+    loss = checkpoint['loss']
+    model.train()
+    return model, optimizer, epoch, loss
 
-def fit_model(model, n_epochs, train_loader, val_loader, n_val, device, logging_interval, X_val, Y_val, n_MC, run_id, verbose=True):
-    model = model.to(device)
-    optimizer = optim.Adam(params=model.parameters(), lr=5e-4)
+def fit_model(model, optimizer, n_epochs, train_loader, val_loader, n_val, device, logging_interval, X_val, Y_val, n_MC, run_id, checkpoint_path=None, verbose=True):
+    if checkpoint_path is not None:
+        model, optimizer, epoch, loss = load_checkpoint(model, optimizer, checkpoint_path)
+    else:
+        epoch = 0
+
     logger = Logger('./logs')
     
-    if not os.path.exists('checkpoint'):
-        os.makedirs('checkpoint')
+    if not os.path.exists('checkpoints'):
+        os.makedirs('checkpoints')
         
     if not os.path.exists('logs'):
         os.makedirs('logs')
     
-    for epoch in range(n_epochs):
+    while epoch < n_epochs:
         for X_, Y_ in train_loader:
             X_batch = Variable(torch.FloatTensor(X_)).to(device)
             Y_batch = Variable(torch.FloatTensor(Y_)).to(device)
@@ -63,8 +62,14 @@ def fit_model(model, n_epochs, train_loader, val_loader, n_val, device, logging_
                     tag = tag.replace('.', '/')
                     logger.histo_summary(tag, value.data.cpu().numpy(), epoch+1)
                     logger.histo_summary(tag+'/grad', value.grad.data.cpu().numpy(), epoch+1)
-            
-        torch.save(model.state_dict(), 'checkpoint/weights_%d.pth' %run_id)
+
+        epoch += 1
+
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'loss': loss}, 'checkpoints/weights_%d.pth' %run_id)
 
     return model
 
@@ -85,22 +90,28 @@ def test(model, X_val, Y_val, n_MC, device):
     Estimate predictive log likelihood:
     log p(y|x, D) = log int p(y|x, w) p(w|D) dw
                  ~= log int p(y|x, w) q(w) dw
-                 ~= log 1/K sum p(y|x, w_k) with w_k sim q(w)
+                 ~= log 1/n_MC sum p(y|x, w_k) with w_k sim q(w)
                   = LogSumExp log p(y|x, w_k) - log n_MC
     :Y_true: a 2D array of size N x Y_dim
-    :MC_samples: a 3D array of size samples n_MC x N x 2*Y_dim
+
+    Note
+    ----
+    Does not use torch
     """
     model.eval()
     n_val, Y_dim = Y_val.shape
-    MC_samples = [model(Variable(torch.FloatTensor(X_val)).to(device)) for _ in range(n_MC)]
+    MC_samples = [model(Variable(torch.FloatTensor(X_val)).to(device)) for _ in range(n_MC)] # shape [K, N, 2D]
     means = torch.stack([tup[0] for tup in MC_samples]).view(n_MC, n_val, Y_dim).cpu().data.numpy()
     logvar = torch.stack([tup[1] for tup in MC_samples]).view(n_MC, n_val, Y_dim).cpu().data.numpy()
-    
-    test_ll = -0.5*np.exp(-logvar)*(means - Y_val.squeeze())**2.0 - 0.5*logvar - 0.5*np.log(2.0*np.pi) #Y_true[None] # shape [K, N, D]
+
+    # per point predictive probability
+    test_ll = -0.5*np.exp(-logvar)*(means - Y_val.squeeze())**2.0 - 0.5*logvar - 0.5*np.log(2.0*np.pi) # shape [K, N, D]
     test_ll = np.sum(np.sum(test_ll, axis=-1), axis=-1) # shape [K,]
     test_ll = logsumexp(test_ll) - np.log(n_MC)
-    pppp = test_ll/n_val  # per point predictive probability
-    rmse = np.sum((np.mean(np.mean(means, 0) - Y_val.squeeze())**2.0, axis=0)**0.5)
+    pppp = test_ll/n_val # FIXME: not sure why we don't do - np.log(n_val) instead 
+
+    # root mean-squared error
+    rmse = np.mean( (np.mean(means, axis=0) - Y_val.squeeze())**2.0 )
     return pppp, rmse
 
 if __name__ == '__main__':

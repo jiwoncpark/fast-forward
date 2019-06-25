@@ -66,6 +66,6 @@ class Logger(object):
             hist.bucket.append(c)
 
         # Create and write Summary
-        summary = tf.compat.v1.Summary(value=[tf.Summary.Value(tag=tag, histo=hist)]) # tf.Summary deprecated
+        summary = tf.compat.v1.Summary(value=[tf.compat.v1.Summary.Value(tag=tag, histo=hist)]) # tf.Summary deprecated
         self.writer.add_summary(summary, step)
         self.writer.flush()
