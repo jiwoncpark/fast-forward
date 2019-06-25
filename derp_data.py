@@ -70,10 +70,14 @@ class DerpData(Dataset):
         self.X_cat_cols = [self.X_col_map['star'],]
         self.X_cat_mapping = dict(zip(self.X_cols, range(len(self.X_cols))))
         
+        # Split train vs. val
+        self.val_indices = np.load('val_indices.npy')
+        self.train_indices = np.array(list(set(range(self.n_trainval)) - set(self.val_indices)))
+        self.n_val = len(self.val_indices)
+        self.n_train = len(self.train_indices)
+
         # Normalize features
-        self.trainval_indices, self.train_indices, self.val_indices, self.n_train = self.split_train_val()
-        self.n_val = self.n_trainval - self.n_train
-        self.normalize_XY(exclude_X_cols=self.X_cat_cols + [], normalize_Y=True)
+        self.normalize_XY(exclude_X_cols=self.X_cat_cols + [], normalize_Y=False)
         
         # Save processed data to disk
         if self.save_to_disk:
@@ -105,7 +109,8 @@ class DerpData(Dataset):
                     'n_train': self.n_train,
                     'X_cat_cols': self.X_cat_cols,
                     'X_cols': self.X_cols,
-                    'Y_cols': self.Y_cols,                        
+                    'Y_cols': self.Y_cols, 
+                    'train_indices': self.train_indices.tolist(),                       
                     'val_indices': self.val_indices.tolist(),
                     'X_mean': self.X_mean.tolist(),
                     'Y_mean': self.Y_mean.tolist(),
@@ -130,7 +135,7 @@ class DerpData(Dataset):
         # Turn fluxes into magnitudes
         for mag_name in ['u', 'g', 'r', 'i', 'z', 'y_truth']: #FIXME: suffixing for y
             mag = self.X[mag_name].values
-            flux = (mag * u.ABmag).to_value(u.nJy)
+            flux = (mag * u.ABmag).to_value(u.Jy)
             flux_name = mag_name + '_flux'
             self.X[flux_name] = flux
             self.X_col_map[mag_name] = flux_name
@@ -147,14 +152,18 @@ class DerpData(Dataset):
             
         # Square root the second moments
         if 'Ixx' in self.Y_base_cols:
-            self.Y['Ixx'] = np.sqrt(self.Y['Ixx'])
+            self.Y.loc[:, 'Ixx'] = np.sqrt(self.Y['Ixx'])
         if 'Iyy' in self.Y_base_cols:
-            self.Y['Iyy'] = np.sqrt(self.Y['Iyy'])
+            self.Y.loc[:, 'Iyy'] = np.sqrt(self.Y['Iyy'])
         
         # Get first moments in asec
         if 'x' in self.Y_base_cols:
-            self.Y['x'] = self.Y['x']/self.pixel_scale
-            self.Y['y_obs'] = self.Y['y_obs']/self.pixel_scale
+            self.Y.loc[:, 'x'] = self.Y['x']/self.pixel_scale
+            self.Y.loc[:, 'y_obs'] = self.Y['y_obs']/self.pixel_scale
+
+        for col in self.Y_base_cols:
+            if 'Flux' in col:
+                self.Y[col] *= 1.e-9 # nJy --> Jy
         
     def zero_extragal_cols_for_stars(self):
         """Zeroes out the extragal columns for stars
@@ -194,13 +203,6 @@ class DerpData(Dataset):
         """
         self.X.fillna(self.mask_val, inplace=True)
         self.y.fillna(self.mask_val, inplace=True)
-        
-    def split_train_val(self):
-        n_train = int(self.n_trainval*self.train_frac)
-        trainval_indices = np.arange(self.n_trainval)
-        np.random.shuffle(trainval_indices)
-        train_indices, val_indices = trainval_indices[:n_train], trainval_indices[n_train:]
-        return trainval_indices, train_indices, val_indices, n_train
     
     def normalize_XY(self, exclude_X_cols=[], exclude_Y_cols=[], normalize_Y=True):
         """Standardizes input X and label Y column-wise except exclude_cols
@@ -231,6 +233,9 @@ class DerpData(Dataset):
             self.Y_std = Y_std
             self.Y.iloc[self.train_indices, :] = (Y_train - self.Y_mean)/self.Y_std
             self.Y.iloc[self.val_indices, :] = (Y_val - self.Y_mean)/self.Y_std
+        else:
+            self.Y_mean = np.zeros((self.Y_dim,))
+            self.Y_std = np.ones((self.Y_dim,))
 
         if self.verbose:
             print("Standardized X except: ", exclude_X_cols)
