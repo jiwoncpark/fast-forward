@@ -5,11 +5,12 @@ from torch.autograd import Variable
 from torch.nn.utils import clip_grad_norm_
 from logger import Logger # for tensorboard logging
 
-def load_checkpoint(model, optimizer, checkpoint_path, n_epochs, device):
+def load_checkpoint(model, optimizer, lr_scheduler, checkpoint_path, n_epochs, device):
     print("Loading checkpoint at %s..." %checkpoint_path)
     checkpoint = torch.load(checkpoint_path)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    model.load_state_dict(checkpoint['model'])
+    optimizer.load_state_dict(checkpoint['optimizer'])
+    lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
     epoch = checkpoint['epoch']
     loss = checkpoint['loss']
     model.to(device)
@@ -17,11 +18,13 @@ def load_checkpoint(model, optimizer, checkpoint_path, n_epochs, device):
     print('Epoch [{}/{}], Loss: {:.4f}'.format(epoch+1, n_epochs, loss.item()))
     return model, optimizer, epoch, loss
 
-def fit_model(model, optimizer, n_epochs, train_loader, val_loader, n_val, device, logging_interval, checkpointing_interval, X_val, Y_val, n_MC, run_id, checkpoint_path=None, verbose=True):
+def fit_model(model, optimizer, lr_scheduler, n_epochs, train_loader, val_loader, 
+    device, logging_interval, checkpointing_interval, X_val, Y_val, n_MC, run_id, checkpoint_path=None, verbose=True):
     n_train = train_loader.dataset.n_train
+    n_val = val_loader.dataset.n_val
 
     if checkpoint_path is not None:
-        model, optimizer, epoch, loss = load_checkpoint(model, optimizer, checkpoint_path, n_epochs, device)
+        model, optimizer, epoch, loss = load_checkpoint(model, optimizer, lr_scheduler, checkpoint_path, n_epochs, device)
         epoch += 1 # Advance one since last save
     else:
         epoch = 0
@@ -48,14 +51,16 @@ def fit_model(model, optimizer, n_epochs, train_loader, val_loader, n_val, devic
             
             optimizer.zero_grad()
             loss.backward()
+            lr_scheduler.step()
             optimizer.step()
         
         if (epoch+1)%(checkpointing_interval) == 0:    
             torch.save({
             'epoch': epoch,
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'loss': loss}, 'checkpoints/weights_%d.pth' %run_id)
+            'model': model.state_dict(),
+            'optimizer': optimizer.state_dict(),
+            'lr_cheduler': lr_scheduler.state_dict(),
+            'loss': loss}, 'checkpoints/weights_%d_%d.pth' %(run_id, epoch+1))
             
         if (epoch+1)%(logging_interval) == 0:
             model.eval()
