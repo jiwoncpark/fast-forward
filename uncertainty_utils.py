@@ -6,7 +6,18 @@ from lsst.sims.photUtils.SignalToNoise import *
 from lsst.sims.photUtils.PhotometricParameters import PhotometricParameters
 from lsst.sims.photUtils.BandpassDict import BandpassDict
 
-def get_epistemic_sigma2(pred_means):
+def get_del_mag(del_f, f):
+    """
+    del_f : float
+        flux uncertainty in nJy
+    f: float
+        flux in nJy
+    """
+    prefactor = 2.5/np.log(10.0)
+    del_mag = prefactor*del_f/f
+    return del_mag
+
+def get_epistemic_sigma2(pred_means, Y_mean, Y_std):
     """
     Parameters
     ----------
@@ -25,7 +36,8 @@ def get_aleatoric_sigma2(pred_logvar, Y_mean, Y_std):
     """
     n_Mc, n_val, Y_dim = pred_logvar.shape
     exponentiated = np.exp(pred_logvar)
-    al_sigma2 = np.mean(exponentiated, axis=0)
+    unstandardized = exponentiated*Y_std**2.0
+    al_sigma2 = np.mean(unstandardized, axis=0)
     return al_sigma2
 
 def get_astrometric_error(mag, band, n_visits=184):
@@ -103,7 +115,7 @@ def assign_obs_error(param, truth_mag, band, run):
         raise NotImplementedError
     return obs_err, err_type
 
-if __name__=='__main__':
+if __name__ == '__main__':
     
     # Quick validation
     
