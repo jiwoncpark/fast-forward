@@ -5,23 +5,26 @@ from torch.autograd import Variable
 from torch.nn.utils import clip_grad_norm_
 from logger import Logger # for tensorboard logging
 
-def load_checkpoint(model, optimizer, checkpoint_path):
+def load_checkpoint(model, optimizer, checkpoint_path, n_epochs, device):
     print("Loading checkpoint at %s..." %checkpoint_path)
     checkpoint = torch.load(checkpoint_path)
     model.load_state_dict(checkpoint['model_state_dict'])
     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     epoch = checkpoint['epoch']
     loss = checkpoint['loss']
-    model.train()
+    model.to(device)
+    print("Starting with...")
+    print('Epoch [{}/{}], Loss: {:.4f}'.format(epoch+1, n_epochs, loss.item()))
     return model, optimizer, epoch, loss
 
-def fit_model(model, optimizer, n_epochs, train_loader, val_loader, n_val, device, logging_interval, X_val, Y_val, n_MC, run_id, checkpoint_path=None, verbose=True):
+def fit_model(model, optimizer, n_epochs, train_loader, val_loader, n_val, device, logging_interval, checkpointing_interval, X_val, Y_val, n_MC, run_id, checkpoint_path=None, verbose=True):
+    n_train = train_loader.dataset.n_train
+
     if checkpoint_path is not None:
-        model, optimizer, epoch, loss = load_checkpoint(model, optimizer, checkpoint_path)
+        model, optimizer, epoch, loss = load_checkpoint(model, optimizer, checkpoint_path, n_epochs, device)
+        epoch += 1 # Advance one since last save
     else:
         epoch = 0
-
-    logger = Logger('./logs')
     
     if not os.path.exists('checkpoints'):
         os.makedirs('checkpoints')
@@ -29,29 +32,41 @@ def fit_model(model, optimizer, n_epochs, train_loader, val_loader, n_val, devic
     if not os.path.exists('logs'):
         os.makedirs('logs')
     
+    logger = Logger('./logs')
+    
     while epoch < n_epochs:
+        model.train()
+        optimizer.zero_grad()
+        epoch_loss = 0
         for X_, Y_ in train_loader:
             X_batch = Variable(torch.FloatTensor(X_)).to(device)
             Y_batch = Variable(torch.FloatTensor(Y_)).to(device)
             
             mean, logvar, regularization = model(X_batch)
-            loss = heteroscedastic_loss(Y_batch, mean, logvar) + regularization
+            loss = nll_loss(Y_batch, mean, logvar) + regularization
+            epoch_loss += loss.item()*X_batch.shape[0]/n_train
             
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
         
-        if (epoch+1)%(logging_interval) == 0:
+        if (epoch+1)%(checkpointing_interval) == 0:    
+            torch.save({
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'loss': loss}, 'checkpoints/weights_%d.pth' %run_id)
             
+        if (epoch+1)%(logging_interval) == 0:
+            model.eval()
             with torch.no_grad():
                 pppp, rmse = test(model, X_val, Y_val, n_MC, device)
                 mean_norm = l2_norm(mean)
                 logvar_norm = l2_norm(logvar)
                 print('Epoch [{}/{}],\
-                Loss: {:.4f}, PPPP: {:.2f}, RMSE: {:.2f}'.format(epoch+1, n_epochs, loss.item(), pppp, rmse))
-                
+                Loss: {:.4f}, PPPP: {:.2f}, RMSE: {:.4f}'.format(epoch+1, n_epochs, epoch_loss, pppp, rmse))
                 # 1. Log scalar values (scalar summary)
-                info = { 'loss': loss.item(), 'PPPP': pppp, 'RMSE': rmse, 
+                info = { 'loss': epoch_loss, 'PPPP': pppp, 'RMSE': rmse, 
                         'mean_norm': mean_norm, 'logvar_norm': logvar_norm }
 
                 for tag, value in info.items():
@@ -62,14 +77,9 @@ def fit_model(model, optimizer, n_epochs, train_loader, val_loader, n_val, devic
                     tag = tag.replace('.', '/')
                     logger.histo_summary(tag, value.data.cpu().numpy(), epoch+1)
                     logger.histo_summary(tag+'/grad', value.grad.data.cpu().numpy(), epoch+1)
+            model.train()
 
         epoch += 1
-
-        torch.save({
-            'epoch': epoch,
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'loss': loss}, 'checkpoints/weights_%d.pth' %run_id)
 
     return model
 
@@ -77,7 +87,7 @@ def l2_norm(pred):
     norm_per_data = torch.norm(pred, dim=1) # shape [n_data,]
     return torch.mean(norm_per_data).item()
 
-def heteroscedastic_loss(true, mean, log_var):
+def nll_loss(true, mean, log_var):
     precision = torch.exp(-log_var)
     return torch.mean(torch.sum(precision * (true - mean)**2.0 + log_var, dim=1), dim=0)
 
@@ -98,7 +108,6 @@ def test(model, X_val, Y_val, n_MC, device):
     ----
     Does not use torch
     """
-    model.eval()
     n_val, Y_dim = Y_val.shape
     MC_samples = [model(Variable(torch.FloatTensor(X_val)).to(device)) for _ in range(n_MC)] # shape [K, N, 2D]
     means = torch.stack([tup[0] for tup in MC_samples]).view(n_MC, n_val, Y_dim).cpu().data.numpy()
