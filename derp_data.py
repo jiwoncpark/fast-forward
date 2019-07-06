@@ -6,6 +6,7 @@ from torch.utils.data import Dataset
 from sklearn.preprocessing import StandardScaler
 import units_utils as units # FIXME: may not be used
 import astropy.units as u
+from collections import OrderedDict
 
 class DerpData(Dataset):
     """Preprocessed and unnormalized Derp dataset."""
@@ -21,6 +22,7 @@ class DerpData(Dataset):
         ignore_null_rows : Bool
             Whether rows with null values will be ignored
         """
+        
         self.verbose = verbose
         self.save_to_disk = save_to_disk
         #self.mask_val = -1
@@ -35,8 +37,8 @@ class DerpData(Dataset):
         #    self.Y_base_cols.append('truth_id')
             
         # Initialize new column mapping and names
-        self.X_col_map = dict(zip(self.X_base_cols, self.X_base_cols)) # same by default
-        self.Y_col_map = dict(zip(self.Y_base_cols, self.Y_base_cols))
+        self.X_col_map = OrderedDict(zip(self.X_base_cols, self.X_base_cols)) # same by default
+        self.Y_col_map = OrderedDict(zip(self.Y_base_cols, self.Y_base_cols))
         
         XY = pd.read_csv(data_path, index_col=None)
         self.X = XY[self.X_base_cols]
@@ -47,6 +49,7 @@ class DerpData(Dataset):
                 self.zero_extragal_cols_for_stars()
             self.zero_nan_for_galaxies()
             self.delete_null_rows()
+            self.delete_negative_fluxes()
         else:
             raise NotImplementedError
             #self.mask_null_values()
@@ -80,6 +83,10 @@ class DerpData(Dataset):
         # Normalize features
         self.normalize_XY(exclude_X_cols=self.X_cat_cols + [], normalize_Y=False)
 
+        # Some QA
+        self.abort_if_null()
+        self.report_star_fraction()
+
         # Save processed data to disk
         if self.save_to_disk:
             if self.verbose:
@@ -99,6 +106,25 @@ class DerpData(Dataset):
         sample_Y  = self.Y[idx, :]
         return sample_X, sample_Y
     
+    def report_star_fraction(self):
+        notstar_colname = self.X_col_map['star']
+        X_train = self.X.iloc[self.train_indices, :]
+        X_val = self.X.iloc[self.val_indices, :]
+        overall_star_frac = 1.0 - self.X[notstar_colname].sum()/self.n_trainval
+        train_star_frac = 1.0 - X_train[notstar_colname].sum()/self.n_train
+        val_star_frac = 1.0 - X_val[notstar_colname].sum()/self.n_val
+        print("Overall star frac: %.2f" %overall_star_frac)
+        print("Training star frac: %.2f" %train_star_frac)
+        print("Validation star frac: %.2f" %val_star_frac)
+
+    def abort_if_null(self):
+        X_null_cols = self.X.columns[self.X.isna().any()].tolist()
+        Y_null_cols = self.Y.columns[self.Y.isna().any()].tolist()
+        print("X has null columns: ", X_null_cols)
+        print("Y has null columns: ", Y_null_cols)
+        if len(X_null_cols) + len(Y_null_cols) > 0:
+            raiseValueError("Null values in data. Aborting...")
+
     def export_metadata_for_eval(self, device_type):
         import json
         
@@ -170,7 +196,7 @@ class DerpData(Dataset):
         
         for col in self.Y_base_cols:
             if 'Flux' in col:
-                self.Y.loc[:, col] = self.Y.loc[:, col]*1.e-9*1000.0 # microJy
+                self.Y.loc[:, col] = self.Y.loc[:, col]*1.e-9*1000.0 # milliJy
 
     def zero_extragal_cols_for_stars(self):
         """Zeroes out the extragal columns for stars
@@ -196,14 +222,27 @@ class DerpData(Dataset):
         """
         n_rows_before = len(self.X)
         y_notnull_rows = np.logical_not(self.Y.isna().any(1))
-        self.X = self.X.loc[y_notnull_rows, :]
-        self.Y = self.Y.loc[y_notnull_rows, :]
+        self.X = self.X.loc[y_notnull_rows, :].reset_index(drop=True)
+        self.Y = self.Y.loc[y_notnull_rows, :].reset_index(drop=True)
         n_rows_after = len(self.X)
-        self.X.reset_index(drop=True, inplace=True)
-        self.Y.reset_index(drop=True, inplace=True)
         if self.verbose:
             print("Deleting null rows: %d --> %d" %(n_rows_before, n_rows_after))
-        
+    
+    def delete_negative_fluxes(self, flux_prefixes=['psFlux_%s', 'cModelFlux_%s'], flux_suffixes=None):
+        """Deletes rows with any negative flux
+        """
+        n_rows_before = len(self.Y)
+        row_mask = np.ones(n_rows_before).astype(bool) # initialize as deleting no row
+        for prefix in flux_prefixes:
+            for bp in 'ugrizy':
+                flux_colname = prefix %bp
+                row_mask = np.logical_and(self.Y[flux_colname]>0, row_mask)
+        self.X = self.X.loc[row_mask, :].reset_index(drop=True)
+        self.Y = self.Y.loc[row_mask, :].reset_index(drop=True)
+        n_rows_after = len(self.Y)
+        if self.verbose:
+            print("Deleting negative fluxes: %d --> %d" %(n_rows_before, n_rows_after))
+
     def mask_null_values(self):
         """Replaces null values with a token, self.mask_val
         
