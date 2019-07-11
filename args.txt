@@ -1,1 +1,6 @@
-{"train_frac": 0.9, "n_epochs": 4000, "lr": 0.0005, "n_MC": 100, "n_features": 512, "batch_size": 2000, "l": 0.0001, "run_id": 5, "logging_interval": 200, "checkpointing_interval": 500, "verbose": true, "checkpoint_path": false}
+{"data_already_processed": false, "train_frac": 0.9, 
+"n_epochs": 300, "batch_size": 1000, "run_id": 0,
+"lr": 0.001, "n_MC": 100, "n_features": 512, "l": 0.01,
+"logging_interval": 10, "checkpointing_interval": 150, 
+"verbose": true, 
+"checkpoint_path": false}
