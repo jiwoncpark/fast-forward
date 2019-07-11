@@ -20,15 +20,18 @@ def plot_confusion_matrix(fig, X, Y, emulated):
     ax.set_xlabel('observed')
     ax.set_ylabel('emulated')
     ax.set_title('stars vs. galaxies')
-    ax.set_xticks([0.25, 0.75], ('not star (galaxy)', 'star'))
-    ax.set_yticks([0.25, 0.75], ('not star (galaxy)', 'star'))
+    ax.set_xticks([0.25, 0.75])
+    ax.set_xticklabels(['not star (galaxy)', 'star'])
+    ax.set_yticks([0.25, 0.75])
+    ax.set_yticklabels(['not star (galaxy)', 'star'])
 
     neg_x = 0.15 
     pos_x = 0.65
-    ax.text(pos_x, 0.75, int(count[1, 1]), fontsize=16, color='white') # true positives
-    ax.text(neg_x, 0.75, int(count[0, 1]), fontsize=16, color='white') # false positives
-    ax.text(pos_x, 0.25, int(count[1, 0]), fontsize=16, color='white') # false negatives
-    ax.text(neg_x, 0.25, int(count[0, 0]), fontsize=16) # true negatives
+    total = np.sum(count)
+    ax.text(pos_x, 0.75, "{} ({:.1f}%)".format(int(count[1, 1]), count[1, 1]/total*100.0), fontsize=16, color='white') # true positives
+    ax.text(neg_x, 0.75, "{} ({:.1f}%)".format(int(count[0, 1]), count[0, 1]/total*100.0), fontsize=16, color='white') # false positives
+    ax.text(pos_x, 0.25, "{} ({:.1f}%)".format(int(count[1, 0]), count[1, 0]/total*100.0), fontsize=16, color='white') # false negatives
+    ax.text(neg_x, 0.25, "{} ({:.1f}%)".format(int(count[0, 0]), count[0, 0]/total*100.0), fontsize=16) # true negatives
     #cbar = plt.colorbar()
     #plt.clim(1000, 60000)
     canvas.draw()
@@ -261,19 +264,7 @@ def get_natural_units(X, Y, mu, al_sig2, ep_sig2, mu_class, al_sig2_class, ep_si
             mu['%s_%s_ep_sig_mag' %(flux_type, bp)] = ep_sig_mag
             mu['%s_%s_total_sig_flux'] = ep_sig_flux + al_sig_flux
             mu['%s_%s_total_sig_mag'] = (ep_sig_mag**2.0 + al_sig_mag**2.0)**0.5
-
-    # First moments in as
-    Y.loc[:, ['Ix', 'Iy']] *= 1000.0*3600.0
-    Y.loc[:, ['Ix', 'Iy']] += ref_centroid
-    Y.loc[:, ['Ix', 'Iy']] *= 0.2
-    mu.loc[:, ['Ix', 'Iy']] *= 1000.0*3600.0
-    mu.loc[:, ['Ix', 'Iy']] += ref_centroid
-    mu.loc[:, ['Ix', 'Iy']] *= 0.2
     
-    for moment_type in ['Ix', 'Iy']:
-        mu['%s_al_sig' %moment_type] = (al_sig2[moment_type].values**0.5*1000.0*3600.0 + ref_centroid)*0.2
-        mu['%s_ep_sig' %moment_type] = (ep_sig2[moment_type].values**0.5*1000.0*3600.0 + ref_centroid)*0.2
-
     # Second moments in as^2
     Y.loc[:, ['Ixx', 'Iyy']] *= Y.loc[:, ['Ixx', 'Iyy']].values
     Y.loc[:, ['IxxPSF', 'IyyPSF']] *= Y.loc[:, ['IxxPSF', 'IyyPSF']].values

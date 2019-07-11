@@ -214,9 +214,9 @@ class DerpData(Dataset):
             self.Y.loc[:, 'IyyPSF'] = np.sqrt(self.Y['IyyPSF'])
         
         # Get first moments in asec
-        if 'Ix' in self.Y_base_cols:
-            self.Y.loc[:, 'Ix'] = (self.Y['Ix']/self.pixel_scale - self.ref_centroid)/3600.0/1000.0 # asec --> deg --> 1000 deg
-            self.Y.loc[:, 'Iy'] = (self.Y['Iy']/self.pixel_scale - self.ref_centroid)/3600.0/1000.0 # asec --> deg --> 1000 deg
+        #if 'Ix' in self.Y_base_cols:
+        #    self.Y.loc[:, 'Ix'] = (self.Y['Ix']/self.pixel_scale - self.ref_centroid)/3600.0/1000.0 # asec --> deg --> 1000 deg
+        #    self.Y.loc[:, 'Iy'] = (self.Y['Iy']/self.pixel_scale - self.ref_centroid)/3600.0/1000.0 # asec --> deg --> 1000 deg
         
         for col in self.Y_base_cols:
             if 'Flux' in col:

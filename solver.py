@@ -122,15 +122,21 @@ def fit_model(model, optimizer, lr_scheduler, train_loader, val_loader,
                     logger.histo_summary(tag+'/grad', value.grad.data.cpu().numpy(), epoch+1)
 
                 # 3. Log training images (image summary)
-                mu = np.mean(means, axis=0)[val_sampled, :]
-                al_sig2 = uncertain.get_aleatoric_sigma2(logvars)[val_sampled, :]
-                ep_sig2 = uncertain.get_epistemic_sigma2(means)[val_sampled, :]
+                mu = np.mean(means, axis=0)
+                al_sig2 = uncertain.get_aleatoric_sigma2(logvars)
+                ep_sig2 = uncertain.get_epistemic_sigma2(means)
                 
-                mu_class = np.mean(1.0 / (1.0 + np.exp(-means_class)), axis=0)[val_sampled, :]
-                al_sig2_class = uncertain.get_aleatoric_sigma2(logvars_class)[val_sampled, :]
-                ep_sig2_class = uncertain.get_epistemic_sigma2(means_class)[val_sampled, :]
+                mu_class = np.mean(1.0 / (1.0 + np.exp(-means_class)), axis=0)
+                al_sig2_class = uncertain.get_aleatoric_sigma2(logvars_class)
+                ep_sig2_class = uncertain.get_epistemic_sigma2(means_class)
                 # Convert to natural units
-                X_to_plot, Y_to_plot, em_to_plot = plotting.get_natural_units(X_val_sampled, Y_val_sampled, mu, al_sig2, ep_sig2, mu_class, al_sig2_class, ep_sig2_class, data_meta)
+                X_to_plot, Y_to_plot, em_to_plot = plotting.get_natural_units(X_val_sampled, Y_val_sampled,
+                    mu[val_sampled, :], al_sig2[val_sampled, :],
+                    ep_sig2[val_sampled, :], mu_class[val_sampled, :],
+                    al_sig2_class[val_sampled, :], ep_sig2_class[val_sampled, :],
+                    data_meta)
+                X_full, Y_full, em_full = plotting.get_natural_units(X_val, Y_val,
+                    mu, al_sig2, ep_sig2, mu_class, al_sig2_class, ep_sig2_class, data_meta)
 
                 # Get mapping plots
                 psFlux_mag = get_magnitude_plot(epoch+1, X_to_plot.loc[:200, :], Y_to_plot.loc[:200, :], em_to_plot.loc[:200, :], 'psFlux_%s', data_meta)
@@ -138,7 +144,7 @@ def fit_model(model, optimizer, lr_scheduler, train_loader, val_loader,
                 psFlux = get_flux_plot(epoch+1, X_to_plot, Y_to_plot, em_to_plot, 'psFlux_%s', data_meta)
                 cModelFlux = get_flux_plot(epoch+1, X_to_plot, Y_to_plot, em_to_plot, 'cModelFlux_%s', data_meta)
                 moments = get_moment_plot(epoch+1, X_to_plot, Y_to_plot, em_to_plot)
-                conf_mat = get_star_metrics(epoch+1, X_to_plot, Y_to_plot, em_to_plot)
+                conf_mat = get_star_metrics(epoch+1, X_full, Y_full, em_full)
 
                 info = {
                 'psFlux_mapping (mag)': psFlux_mag,
@@ -169,7 +175,7 @@ def get_star_metrics(epoch, X, Y, emulated):
 def get_moment_plot(epoch, X, Y, emulated):
     my_dpi = 72.0
     per_filter = []
-    for moment_type in ['Ix', 'Iy', 'Ixx', 'Ixy', 'Iyy', 'IxxPSF', 'IxyPSF', 'IyyPSF', 'ra_offset', 'dec_offset']:
+    for moment_type in ['Ixx', 'Ixy', 'Iyy', 'IxxPSF', 'IxyPSF', 'IyyPSF', 'ra_offset', 'dec_offset']:
         fig = Figure(figsize=(720/my_dpi, 360/my_dpi), dpi=my_dpi, tight_layout=True)
         canvas = plotting.plot_moment(fig, X, Y, emulated, moment_type)
         width, height = fig.get_size_inches() * fig.get_dpi()

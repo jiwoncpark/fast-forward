@@ -36,7 +36,7 @@ truth_cols += ['size_bulge_true', 'size_minor_bulge_true', 'ellipticity_1_bulge_
 truth_cols += ['size_disk_true', 'size_minor_disk_true', 'ellipticity_1_disk_true', 'ellipticity_2_disk_true',]
 opsim_cols = ['m5_flux', 'PSF_sigma2', 'filtSkyBrightness_flux', 'airmass', 'n_obs']
 # Y base columns
-drp_cols = ['Ix', 'Iy', 'ra_obs', 'dec_obs', 'Ixx', 'Ixy', 'Iyy', 'IxxPSF', 'IxyPSF', 'IyyPSF',] #'extendedness',]
+drp_cols = ['extendedness', 'ra_obs', 'dec_obs', 'Ixx', 'Ixy', 'Iyy', 'IxxPSF', 'IxyPSF', 'IyyPSF', ]
 drp_cols_prefix = ['cModelFlux_', 'psFlux_']
 drp_cols_suffix = []
 #drp_cols_suffix = ['_ext_photometryKron_KronFlux_instFlux', '_base_CircularApertureFlux_70_0_instFlux', 
