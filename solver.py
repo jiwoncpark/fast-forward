@@ -4,6 +4,12 @@ import torch
 from torch.autograd import Variable
 from torch.nn.utils import clip_grad_norm_
 from logger import Logger # for tensorboard logging
+import plotting_utils as plotting
+from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
+from matplotlib.figure import Figure
+import uncertainty_utils as uncertain
+from collections import OrderedDict
+import io
 
 def load_checkpoint(model, optimizer, lr_scheduler, checkpoint_path, n_epochs, device):
     print("Loading checkpoint at %s..." %checkpoint_path)
@@ -18,13 +24,41 @@ def load_checkpoint(model, optimizer, lr_scheduler, checkpoint_path, n_epochs, d
     print('Epoch [{}/{}], Loss: {:.4f}'.format(epoch+1, n_epochs, loss.item()))
     return model, optimizer, epoch, loss
 
-def fit_model(model, optimizer, lr_scheduler, n_epochs, train_loader, val_loader, 
-    device, logging_interval, checkpointing_interval, X_val, Y_val, n_MC, run_id, checkpoint_path=None, verbose=True):
-    n_train = train_loader.dataset.n_train
-    n_val = val_loader.dataset.n_val
+def fit_model(model, optimizer, lr_scheduler, train_loader, val_loader, 
+    device, args, data_meta, X_val, Y_val, checkpoint_path=None):
+    n_train = len(data_meta['train_indices'])
+    n_val = len(data_meta['val_indices'])
+    val_sampled_good = [5182, 5208,  166, 6136, 3789, 1092, 6300, 3729, 6145,  258, 4318,
+                   3006, 3917, 3206,  557, 2977, 4458, 6104, 2923, 3300, 3674,  734,
+                   2997, 4865, 3988, 2008, 2031, 4745, 1259, 2730,  689, 2277, 4363,
+                   2904, 3881, 2629, 4995, 5171, 4533, 5032, 4682, 2632, 2004, 4116,
+                   6425, 6420, 4946, 5316, 5343, 2037, 1721,  616, 5492, 3975, 6188,
+                   4107, 4416, 6157, 6700, 5909, 4529, 6511, 2582, 2823, 6229, 3629,
+                   1722, 2627,  309, 3595, 2235, 5919, 1305, 3839, 6212, 2446, 4328,
+                   3930, 4469,  456, 1377,  970, 5702, 4866, 4678, 3438, 5707, 1415,
+                   3237, 3738, 5358, 5600, 1821, 3452, 6207, 5619,  378, 5929, 5928,
+                   3647,  405, 2581, 2777, 3714, 6650,  403, 3573, 4110, 2386, 2196,
+                   5579, 5698, 4896, 5373, 6006, 3520, 6560, 1900, 3797, 4709, 2041,
+                   5416, 3733, 5741, 1957, 6355, 2973, 2070, 4918, 1947, 1242,  736,
+                   5783, 4433, 5295,  949, 1258, 4196, 4445, 3687,  223, 3916, 2811,
+                   3689, 6513, 3791, 5197, 5297, 5901, 4642, 5984, 2510, 5948,  695,
+                     89, 6694, 2588, 3784, 6443,  404, 3437, 1027, 3243, 5103, 4150,
+                   1373, 6618,  626, 3800, 1904, 3459,  794, 1634,  612, 5408, 6211,
+                   1261, 3987, 2222, 5757, 1911, 2875, 2667, 5283, 3644, 5061, 4942,
+                   6574, 6600, 3519, 6611, 2796, 6717, 1427,  509,  926, 1475, 2612,
+                   5540, 3333]
+    val_sampled_bad = [6518, 1300, 1309, 2134, 4271,  328, 4949,  989,  114, 4614, 3999,
+                   4123, 5534, 3487,  290, 5782, 5260, 3012, 4186,  148, 2036, 2035,
+                   4643, 1272, 2463, 5684, 1485, 2607, 1571, 6580, 5154,  228,  136,
+                   3544, 5791, 1783, 6159, 6007, 6235,  744, 6566, 1813,  937, 5415,
+                    624, 2506, 4460, 5383, 1187,  663]
+    val_sampled = val_sampled_good + val_sampled_bad
+    X_val_sampled = X_val[val_sampled, :] # shape [n_subsampled, X_dim]
+    Y_val_sampled = Y_val[val_sampled, :] # shape [n_subsampled, Y_dim]
+
 
     if checkpoint_path is not None:
-        model, optimizer, epoch, loss = load_checkpoint(model, optimizer, lr_scheduler, checkpoint_path, n_epochs, device)
+        model, optimizer, epoch, loss = load_checkpoint(model, optimizer, lr_scheduler, checkpoint_path, args['n_epochs'], device)
         epoch += 1 # Advance one since last save
     else:
         epoch = 0
@@ -37,7 +71,7 @@ def fit_model(model, optimizer, lr_scheduler, n_epochs, train_loader, val_loader
     
     logger = Logger('./logs')
     
-    while epoch < n_epochs:
+    while epoch < args['n_epochs']:
         model.train()
         optimizer.zero_grad()
         epoch_loss = 0
@@ -51,25 +85,24 @@ def fit_model(model, optimizer, lr_scheduler, n_epochs, train_loader, val_loader
             
             optimizer.zero_grad()
             loss.backward()
-            lr_scheduler.step()
             optimizer.step()
         
-        if (epoch+1)%(checkpointing_interval) == 0:    
+        if (epoch+1)%(args['checkpointing_interval']) == 0:    
             torch.save({
             'epoch': epoch,
             'model': model.state_dict(),
             'optimizer': optimizer.state_dict(),
-            'lr_cheduler': lr_scheduler.state_dict(),
-            'loss': loss}, 'checkpoints/weights_%d_%d.pth' %(run_id, epoch+1))
+            'lr_scheduler': lr_scheduler.state_dict(),
+            'loss': loss}, 'checkpoints/weights_%d_%d.pth' %(args['run_id'], epoch+1))
             
-        if (epoch+1)%(logging_interval) == 0:
+        if (epoch+1)%(args['logging_interval']) == 0:
             model.eval()
             with torch.no_grad():
-                pppp, rmse = test(model, X_val, Y_val, n_MC, device)
-                mean_norm = l2_norm(mean)
-                logvar_norm = l2_norm(logvar)
+                means, logvar = mc_sample(model, X_val, Y_val, args['n_MC'], device)
+                pppp, rmse, mean_norm, logvar_norm = get_scalar_metrics(means, logvar, Y_val, args['n_MC'])
+                
                 print('Epoch [{}/{}],\
-                Loss: {:.4f}, PPPP: {:.2f}, RMSE: {:.4f}'.format(epoch+1, n_epochs, epoch_loss, pppp, rmse))
+                Loss: {:.4f}, PPPP: {:.2f}, RMSE: {:.4f}'.format(epoch+1, args['n_epochs'], epoch_loss, pppp, rmse))
                 # 1. Log scalar values (scalar summary)
                 info = { 'loss': epoch_loss, 'PPPP': pppp, 'RMSE': rmse, 
                         'mean_norm': mean_norm, 'logvar_norm': logvar_norm }
@@ -82,15 +115,81 @@ def fit_model(model, optimizer, lr_scheduler, n_epochs, train_loader, val_loader
                     tag = tag.replace('.', '/')
                     logger.histo_summary(tag, value.data.cpu().numpy(), epoch+1)
                     logger.histo_summary(tag+'/grad', value.grad.data.cpu().numpy(), epoch+1)
+
+                # 3. Log training images (image summary)
+                mu = np.mean(means, axis=0)[val_sampled, :]
+                ep_sig2 = uncertain.get_epistemic_sigma2(means)[val_sampled, :]
+                al_sig2 = uncertain.get_aleatoric_sigma2(logvar)[val_sampled, :]
+
+                # Convert to natural units
+                X_to_plot, Y_to_plot, em_to_plot = plotting.get_natural_units(X_val_sampled, Y_val_sampled, mu, al_sig2, ep_sig2, data_meta)
+
+                # Get mapping plots
+                psFlux_mag = get_magnitude_plot(epoch+1, X_to_plot.loc[:200, :], Y_to_plot.loc[:200, :], em_to_plot.loc[:200, :], 'psFlux_%s', data_meta)
+                cModelFlux_mag = get_magnitude_plot(epoch+1, X_to_plot.loc[:200, :], Y_to_plot.loc[:200, :], em_to_plot.loc[:200, :], 'cModelFlux_%s', data_meta)
+                psFlux = get_flux_plot(epoch+1, X_to_plot, Y_to_plot, em_to_plot, 'psFlux_%s', data_meta)
+                cModelFlux = get_flux_plot(epoch+1, X_to_plot, Y_to_plot, em_to_plot, 'cModelFlux_%s', data_meta)
+                moments = get_moment_plot(epoch+1, X_to_plot, Y_to_plot, em_to_plot, data_meta)
+
+                info = {
+                'psFlux_mapping (mag)': psFlux_mag,
+                'cModelFlux_mapping (mag)': cModelFlux_mag,
+                'psFlux_mapping (Jy)': psFlux,
+                'cModelFlux_mapping (Jy)': cModelFlux,
+                'moments': moments}                 
+
+                for tag, images in info.items():
+                    logger.image_summary(tag, images, epoch+1)
+
             model.train()
 
         epoch += 1
+        lr_scheduler.step()
 
     return model
 
+def get_moment_plot(epoch, X, Y, emulated, data_meta):
+    my_dpi = 72.0
+    per_filter = []
+    for moment_type in ['Ix', 'Iy', 'Ixx', 'Ixy', 'Iyy', 'IxxPSF', 'IxyPSF', 'IyyPSF', 'ra_offset', 'dec_offset']:
+        fig = Figure(figsize=(720/my_dpi, 360/my_dpi), dpi=my_dpi, tight_layout=True)
+        canvas = plotting.plot_moment(fig, X, Y, emulated, moment_type)
+        width, height = fig.get_size_inches() * fig.get_dpi()
+        img = np.frombuffer(canvas.tostring_rgb(), dtype='uint8').reshape(1, int(height), int(width), 3)
+        per_filter.append(img)
+    all_filters = np.concatenate(per_filter, axis=0)
+    #np.save('img_%d' %epoch, img)
+    return all_filters
+
+def get_flux_plot(epoch, X, Y, emulated, flux_formatting, data_meta):
+    my_dpi = 72.0
+    per_filter = []
+    for bp in 'ugrizy':
+        fig = Figure(figsize=(720/my_dpi, 360/my_dpi), dpi=my_dpi, tight_layout=True)
+        canvas = plotting.plot_flux(fig, X, Y, emulated, flux_formatting, bp)
+        width, height = fig.get_size_inches() * fig.get_dpi()
+        img = np.frombuffer(canvas.tostring_rgb(), dtype='uint8').reshape(1, int(height), int(width), 3)
+        per_filter.append(img)
+    all_filters = np.concatenate(per_filter, axis=0)
+    #np.save('img_%d' %epoch, img)
+    return all_filters
+
+def get_magnitude_plot(epoch, X, Y, emulated, flux_formatting, data_meta):
+    my_dpi = 72.0
+    per_filter = []
+    for bp in 'ugrizy':
+        fig = Figure(figsize=(720/my_dpi, 360/my_dpi), dpi=my_dpi, tight_layout=True)
+        canvas = plotting.plot_magnitude(fig, X, Y, emulated, flux_formatting, bp)
+        width, height = fig.get_size_inches() * fig.get_dpi()
+        img = np.frombuffer(canvas.tostring_rgb(), dtype='uint8').reshape(1, int(height), int(width), 3)
+        per_filter.append(img)
+    all_filters = np.concatenate(per_filter, axis=0)
+    #np.save('img_%d' %epoch, img)
+    return all_filters
+
 def l2_norm(pred):
-    norm_per_data = torch.norm(pred, dim=1) # shape [n_data,]
-    return torch.mean(norm_per_data).item()
+    norm_per_data = np.linalg.norm(pred, axis=2) # shape [n_MC, n_data]
+    return np.mean(norm_per_data)
 
 def nll_loss(true, mean, log_var):
     precision = torch.exp(-log_var)
@@ -100,7 +199,14 @@ def logsumexp(a):
     a_max = a.max(axis=0)
     return np.log(np.sum(np.exp(a - a_max), axis=0)) + a_max
 
-def test(model, X_val, Y_val, n_MC, device):
+def mc_sample(model, X_val, Y_val, n_MC, device):
+    n_val, Y_dim = Y_val.shape
+    MC_samples = [model(Variable(torch.FloatTensor(X_val)).to(device)) for _ in range(n_MC)] # shape [K, N, 2D]
+    means = torch.stack([tup[0] for tup in MC_samples]).view(n_MC, n_val, Y_dim).cpu().data.numpy()
+    logvar = torch.stack([tup[1] for tup in MC_samples]).view(n_MC, n_val, Y_dim).cpu().data.numpy()
+    return means, logvar
+
+def get_scalar_metrics(means, logvar, Y_val, n_MC):
     """
     Estimate predictive log likelihood:
     log p(y|x, D) = log int p(y|x, w) p(w|D) dw
@@ -113,12 +219,8 @@ def test(model, X_val, Y_val, n_MC, device):
     ----
     Does not use torch
     """
-    n_val, Y_dim = Y_val.shape
-    MC_samples = [model(Variable(torch.FloatTensor(X_val)).to(device)) for _ in range(n_MC)] # shape [K, N, 2D]
-    means = torch.stack([tup[0] for tup in MC_samples]).view(n_MC, n_val, Y_dim).cpu().data.numpy()
-    logvar = torch.stack([tup[1] for tup in MC_samples]).view(n_MC, n_val, Y_dim).cpu().data.numpy()
-
     # per point predictive probability
+    n_val, Y_dim = Y_val.shape
     test_ll = -0.5*np.exp(-logvar)*(means - Y_val.squeeze())**2.0 - 0.5*logvar - 0.5*np.log(2.0*np.pi) # shape [K, N, D]
     test_ll = np.sum(np.sum(test_ll, axis=-1), axis=-1) # shape [K,]
     test_ll = logsumexp(test_ll) - np.log(n_MC)
@@ -126,7 +228,7 @@ def test(model, X_val, Y_val, n_MC, device):
 
     # root mean-squared error
     rmse = np.mean( (np.mean(means, axis=0) - Y_val.squeeze())**2.0 )
-    return pppp, rmse
+    return pppp, rmse, l2_norm(means), l2_norm(logvar)
 
 if __name__ == '__main__':
     pass
