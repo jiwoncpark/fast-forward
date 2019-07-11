@@ -161,9 +161,8 @@ class DerpData(Dataset):
                     'train_indices': self.train_indices.tolist(),                       
                     'val_indices': self.val_indices.tolist(),
                     'X_mean': self.X_mean.tolist(),
-                    'Y_mean': self.Y_mean.tolist(),
                     'X_std': self.X_std.tolist(),
-                    'Y_std': self.Y_std.tolist(),}
+                    }
         
         with open('data_meta.txt', 'w') as fp:
             json.dump(data_meta, fp)
@@ -179,6 +178,9 @@ class DerpData(Dataset):
         self.scale_flux = 1.e5
         self.ref_centroid = 350000.0 # arcsec
         
+        if 'extendedness' in self.Y_base_cols:
+            self.Y.loc[:, 'extendedness'] = 1.0 - self.Y['extendedness'].values
+
         # Turn total mag into flux
         for mag_name in 'ugrizy':
             mag = self.X[mag_name].values

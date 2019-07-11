@@ -33,6 +33,7 @@ class ConcreteDropout(nn.Module):
     def _concrete_dropout(self, x, p):
         eps = 1e-7
         temp = 0.1
+        # \tilde z (relaxed version of Bernoulli, p.4)
         unif_noise = torch.rand_like(x)
         drop_prob = (torch.log(p + eps)
                     - torch.log(1 - p + eps)
@@ -53,8 +54,10 @@ class ConcreteDense(nn.Module):
         self.linear2 = nn.Linear(nb_features, nb_features)
         self.linear3 = nn.Linear(nb_features, nb_features)
 
-        self.linear4_mu = nn.Linear(nb_features, Y_dim)
-        self.linear4_logvar = nn.Linear(nb_features, Y_dim)
+        self.linear4_mu = nn.Linear(nb_features, Y_dim - 1)
+        self.linear4_logvar = nn.Linear(nb_features, Y_dim - 1)
+        self.linear4_mu_classifier = nn.Linear(nb_features, 1)
+        self.linear4_logvar_classifier = nn.Linear(nb_features, 1)
 
         self.conc_drop1 = ConcreteDropout(weight_regularizer=weight_regularizer,
                                           dropout_regularizer=dropout_regularizer)
@@ -66,16 +69,23 @@ class ConcreteDense(nn.Module):
                                              dropout_regularizer=dropout_regularizer)
         self.conc_drop_logvar = ConcreteDropout(weight_regularizer=weight_regularizer,
                                                  dropout_regularizer=dropout_regularizer)
+        self.conc_drop_mu_classifier = ConcreteDropout(weight_regularizer=weight_regularizer,
+                                             dropout_regularizer=dropout_regularizer)
+        self.conc_drop_logvar_classifier = ConcreteDropout(weight_regularizer=weight_regularizer,
+                                                 dropout_regularizer=dropout_regularizer)
+
         self.tanh = nn.Tanh()
         
     def forward(self, x):
-        regularization = torch.empty(5, device=x.device)
+        regularization = torch.empty(7, device=x.device)
         
         x1, regularization[0] = self.conc_drop1(x, nn.Sequential(self.linear1, self.tanh))
         x2, regularization[1] = self.conc_drop2(x1, nn.Sequential(self.linear2, self.tanh))
         x3, regularization[2] = self.conc_drop3(x2, nn.Sequential(self.linear3, self.tanh))
         
-        mean, regularization[3] = self.conc_drop_mu(x3, self.linear4_mu) # ~ [batch, Y_dim]
-        log_var, regularization[4] = self.conc_drop_logvar(x3, self.linear4_logvar) # ~ [batch, Y_dim] 
-        
-        return mean, log_var, regularization.sum()
+        mean, regularization[3] = self.conc_drop_mu(x3, self.linear4_mu) # ~ [batch, Y_dim - 1]
+        log_var, regularization[4] = self.conc_drop_logvar(x3, self.linear4_logvar) # ~ [batch, Y_dim - 1] 
+        mean_classifier, regularization[5] = self.conc_drop_mu_classifier(x3, self.linear4_mu_classifier) # ~ [batch, 1]
+        log_var_classifier, regularization[6] = self.conc_drop_logvar_classifier(x3, self.linear4_logvar_classifier) # ~ [batch, 1]
+
+        return mean, log_var, mean_classifier, log_var_classifier, regularization.sum()

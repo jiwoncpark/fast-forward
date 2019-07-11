@@ -1,3 +1,4 @@
+import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 import numpy as np
@@ -5,6 +6,33 @@ import pandas as pd
 import astropy.units as u
 import units_utils as units
 import uncertainty_utils as uncertain
+
+def plot_confusion_matrix(fig, X, Y, emulated):
+    canvas = FigureCanvas(fig)
+    ax = fig.gca()
+
+    truth_colname = 'star'
+    observed_colname = 'extendedness'
+    
+    obs = (Y[observed_colname].values).astype(int)
+    em = (emulated[observed_colname].values > 0.5).astype(int)
+    count, _, _, _ = ax.hist2d(obs, em, norm=matplotlib.colors.LogNorm(), bins=2, cmap=plt.cm.get_cmap("gray")) #marker='.', alpha=0.2, label='_nolegend_')
+    ax.set_xlabel('observed')
+    ax.set_ylabel('emulated')
+    ax.set_title('stars vs. galaxies')
+    ax.set_xticks([0.25, 0.75], ('not star (galaxy)', 'star'))
+    ax.set_yticks([0.25, 0.75], ('not star (galaxy)', 'star'))
+
+    neg_x = 0.15 
+    pos_x = 0.65
+    ax.text(pos_x, 0.75, int(count[1, 1]), fontsize=16, color='white') # true positives
+    ax.text(neg_x, 0.75, int(count[0, 1]), fontsize=16, color='white') # false positives
+    ax.text(pos_x, 0.25, int(count[1, 0]), fontsize=16, color='white') # false negatives
+    ax.text(neg_x, 0.25, int(count[0, 0]), fontsize=16) # true negatives
+    #cbar = plt.colorbar()
+    #plt.clim(1000, 60000)
+    canvas.draw()
+    return canvas
 
 def plot_moment(fig, X, Y, emulated, moment_type, display_uncertainty='aleatoric', run='1.2i', plot_offset=True):
     canvas = FigureCanvas(fig)
@@ -161,7 +189,7 @@ def plot_magnitude(fig, X, Y, emulated, flux_formatting, bandpass, display_uncer
     canvas.draw()
     return canvas
 
-def get_natural_units(X, Y, mu, al_sig2, ep_sig2, meta):
+def get_natural_units(X, Y, mu, al_sig2, ep_sig2, mu_class, al_sig2_class, ep_sig2_class, meta):
     revert_flux = 1.0/meta['scale_flux']
     null_mag_flag = -1
     ref_centroid = meta['ref_centroid']
@@ -169,13 +197,14 @@ def get_natural_units(X, Y, mu, al_sig2, ep_sig2, meta):
     # For broadcasting
     X_mean = np.array(meta['X_mean']).reshape(1, -1)
     X_std = np.array(meta['X_std']).reshape(1, -1)
-    Y_mean = np.array(meta['Y_mean']).reshape(1, -1)
-    Y_std = np.array(meta['Y_std']).reshape(1, -1)
     
     # Unstandardize
     X = X*X_std + X_mean
-    Y = Y*Y_std + Y_mean
-    mu = mu*Y_std + Y_mean
+
+    # Concat classification results
+    mu = np.concatenate([mu_class, mu,], axis=1)
+    al_sig2 = np.concatenate([al_sig2_class, al_sig2,], axis=1)
+    ep_sig2 = np.concatenate([ep_sig2_class, ep_sig2,], axis=1)
     
     # Dictify
     X = pd.DataFrame(X, index=None, columns=meta['X_cols'])

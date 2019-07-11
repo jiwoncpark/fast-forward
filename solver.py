@@ -3,6 +3,7 @@ import numpy as np
 import torch
 from torch.autograd import Variable
 from torch.nn.utils import clip_grad_norm_
+import torch.nn as nn
 from logger import Logger # for tensorboard logging
 import plotting_utils as plotting
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
@@ -79,10 +80,14 @@ def fit_model(model, optimizer, lr_scheduler, train_loader, val_loader,
             X_batch = Variable(torch.FloatTensor(X_)).to(device)
             Y_batch = Variable(torch.FloatTensor(Y_)).to(device)
             
-            mean, logvar, regularization = model(X_batch)
-            loss = nll_loss(Y_batch, mean, logvar) + regularization
-            epoch_loss += loss.item()*X_batch.shape[0]/n_train
+            mean, logvar, mean_classifier, logvar_classifier, regularization = model(X_batch)
+            # regression loss
+            loss = nll_loss_regress(Y_batch[:, 1:], mean, logvar) + regularization
+            # classification loss
+            loss += nll_loss_classify(Y_batch[:, 0].view([-1, 1]), mean_classifier, logvar_classifier)
             
+            epoch_loss += loss.item()*X_batch.shape[0]/n_train
+    
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -98,8 +103,8 @@ def fit_model(model, optimizer, lr_scheduler, train_loader, val_loader,
         if (epoch+1)%(args['logging_interval']) == 0:
             model.eval()
             with torch.no_grad():
-                means, logvar = mc_sample(model, X_val, Y_val, args['n_MC'], device)
-                pppp, rmse, mean_norm, logvar_norm = get_scalar_metrics(means, logvar, Y_val, args['n_MC'])
+                means, logvars, means_class, logvars_class = mc_sample(model, X_val, Y_val, args['n_MC'], device)
+                pppp, rmse, mean_norm, logvar_norm = get_scalar_metrics(means, logvars, Y_val[:, 1:], args['n_MC'])
                 
                 print('Epoch [{}/{}],\
                 Loss: {:.4f}, PPPP: {:.2f}, RMSE: {:.4f}'.format(epoch+1, args['n_epochs'], epoch_loss, pppp, rmse))
@@ -118,25 +123,30 @@ def fit_model(model, optimizer, lr_scheduler, train_loader, val_loader,
 
                 # 3. Log training images (image summary)
                 mu = np.mean(means, axis=0)[val_sampled, :]
+                al_sig2 = uncertain.get_aleatoric_sigma2(logvars)[val_sampled, :]
                 ep_sig2 = uncertain.get_epistemic_sigma2(means)[val_sampled, :]
-                al_sig2 = uncertain.get_aleatoric_sigma2(logvar)[val_sampled, :]
-
+                
+                mu_class = np.mean(1.0 / (1.0 + np.exp(-means_class)), axis=0)[val_sampled, :]
+                al_sig2_class = uncertain.get_aleatoric_sigma2(logvars_class)[val_sampled, :]
+                ep_sig2_class = uncertain.get_epistemic_sigma2(means_class)[val_sampled, :]
                 # Convert to natural units
-                X_to_plot, Y_to_plot, em_to_plot = plotting.get_natural_units(X_val_sampled, Y_val_sampled, mu, al_sig2, ep_sig2, data_meta)
+                X_to_plot, Y_to_plot, em_to_plot = plotting.get_natural_units(X_val_sampled, Y_val_sampled, mu, al_sig2, ep_sig2, mu_class, al_sig2_class, ep_sig2_class, data_meta)
 
                 # Get mapping plots
                 psFlux_mag = get_magnitude_plot(epoch+1, X_to_plot.loc[:200, :], Y_to_plot.loc[:200, :], em_to_plot.loc[:200, :], 'psFlux_%s', data_meta)
                 cModelFlux_mag = get_magnitude_plot(epoch+1, X_to_plot.loc[:200, :], Y_to_plot.loc[:200, :], em_to_plot.loc[:200, :], 'cModelFlux_%s', data_meta)
                 psFlux = get_flux_plot(epoch+1, X_to_plot, Y_to_plot, em_to_plot, 'psFlux_%s', data_meta)
                 cModelFlux = get_flux_plot(epoch+1, X_to_plot, Y_to_plot, em_to_plot, 'cModelFlux_%s', data_meta)
-                moments = get_moment_plot(epoch+1, X_to_plot, Y_to_plot, em_to_plot, data_meta)
+                moments = get_moment_plot(epoch+1, X_to_plot, Y_to_plot, em_to_plot)
+                conf_mat = get_star_metrics(epoch+1, X_to_plot, Y_to_plot, em_to_plot)
 
                 info = {
                 'psFlux_mapping (mag)': psFlux_mag,
                 'cModelFlux_mapping (mag)': cModelFlux_mag,
                 'psFlux_mapping (Jy)': psFlux,
                 'cModelFlux_mapping (Jy)': cModelFlux,
-                'moments': moments}                 
+                'moments': moments,
+                'star classification': conf_mat}                 
 
                 for tag, images in info.items():
                     logger.image_summary(tag, images, epoch+1)
@@ -148,7 +158,15 @@ def fit_model(model, optimizer, lr_scheduler, train_loader, val_loader,
 
     return model
 
-def get_moment_plot(epoch, X, Y, emulated, data_meta):
+def get_star_metrics(epoch, X, Y, emulated):
+    my_dpi = 72.0
+    fig = Figure(figsize=(720/my_dpi, 360/my_dpi), dpi=my_dpi, tight_layout=True)
+    canvas = plotting.plot_confusion_matrix(fig, X, Y, emulated)
+    width, height = fig.get_size_inches() * fig.get_dpi()
+    conf_mat = np.frombuffer(canvas.tostring_rgb(), dtype='uint8').reshape(1, int(height), int(width), 3)
+    return conf_mat
+
+def get_moment_plot(epoch, X, Y, emulated):
     my_dpi = 72.0
     per_filter = []
     for moment_type in ['Ix', 'Iy', 'Ixx', 'Ixy', 'Iyy', 'IxxPSF', 'IxyPSF', 'IyyPSF', 'ra_offset', 'dec_offset']:
@@ -191,9 +209,15 @@ def l2_norm(pred):
     norm_per_data = np.linalg.norm(pred, axis=2) # shape [n_MC, n_data]
     return np.mean(norm_per_data)
 
-def nll_loss(true, mean, log_var):
+def nll_loss_regress(true, mean, log_var):
     precision = torch.exp(-log_var)
     return torch.mean(torch.sum(precision * (true - mean)**2.0 + log_var, dim=1), dim=0)
+
+def nll_loss_classify(true, mean, log_var):
+    #precision = torch.exp(-log_var)
+    #return torch.mean(torch.sum(precision * (true - mean)**2.0 + log_var, dim=1), dim=0)
+    loss = nn.BCEWithLogitsLoss()
+    return loss(mean, true)
 
 def logsumexp(a):
     a_max = a.max(axis=0)
@@ -202,9 +226,11 @@ def logsumexp(a):
 def mc_sample(model, X_val, Y_val, n_MC, device):
     n_val, Y_dim = Y_val.shape
     MC_samples = [model(Variable(torch.FloatTensor(X_val)).to(device)) for _ in range(n_MC)] # shape [K, N, 2D]
-    means = torch.stack([tup[0] for tup in MC_samples]).view(n_MC, n_val, Y_dim).cpu().data.numpy()
-    logvar = torch.stack([tup[1] for tup in MC_samples]).view(n_MC, n_val, Y_dim).cpu().data.numpy()
-    return means, logvar
+    means = torch.stack([tup[0] for tup in MC_samples]).view(n_MC, n_val, Y_dim - 1).cpu().data.numpy()
+    logvars = torch.stack([tup[1] for tup in MC_samples]).view(n_MC, n_val, Y_dim - 1).cpu().data.numpy()
+    means_class = torch.stack([tup[2] for tup in MC_samples]).view(n_MC, n_val, 1).cpu().data.numpy()
+    logvars_class = torch.stack([tup[3] for tup in MC_samples]).view(n_MC, n_val, 1).cpu().data.numpy()
+    return means, logvars, means_class, logvars_class
 
 def get_scalar_metrics(means, logvar, Y_val, n_MC):
     """
