@@ -2,6 +2,7 @@
 import tensorflow as tf
 import numpy as np
 import scipy.misc 
+from PIL import Image
 try:
     from StringIO import StringIO  # Python 2.7
 except ImportError:
@@ -29,17 +30,17 @@ class Logger(object):
                 s = StringIO()
             except:
                 s = BytesIO()
-            scipy.misc.toimage(img).save(s, format="png")
+            Image.fromarray(img, mode='RGB').save(s, format='png')
 
             # Create an Image object
-            img_sum = tf.Summary.Image(encoded_image_string=s.getvalue(),
+            img_sum = tf.compat.v1.Summary.Image(encoded_image_string=s.getvalue(), # tf.Summary deprecated
                                        height=img.shape[0],
                                        width=img.shape[1])
             # Create a Summary value
-            img_summaries.append(tf.Summary.Value(tag='%s/%d' % (tag, i), image=img_sum))
+            img_summaries.append(tf.compat.v1.Summary.Value(tag='%s/%d' % (tag, i), image=img_sum))
 
         # Create and write Summary
-        summary = tf.Summary(value=img_summaries)
+        summary = tf.compat.v1.Summary(value=img_summaries)
         self.writer.add_summary(summary, step)
         
     def histo_summary(self, tag, values, step, bins=1000):
