@@ -17,7 +17,7 @@ def get_del_mag(del_f, f):
     del_mag = prefactor*del_f/f
     return del_mag
 
-def get_epistemic_sigma2(pred_means, Y_mean, Y_std):
+def get_epistemic_sigma2(pred_means):
     """
     Parameters
     ----------
@@ -27,7 +27,7 @@ def get_epistemic_sigma2(pred_means, Y_mean, Y_std):
     ep_sigma2 = np.var(pred_means, axis=0)
     return ep_sigma2
 
-def get_aleatoric_sigma2(pred_logvar, Y_mean, Y_std):
+def get_aleatoric_sigma2(pred_logvar):
     """
     Parameters
     ----------
@@ -35,9 +35,7 @@ def get_aleatoric_sigma2(pred_logvar, Y_mean, Y_std):
         Network predictions of the log(parameter sigmas)
     """
     n_Mc, n_val, Y_dim = pred_logvar.shape
-    exponentiated = np.exp(pred_logvar)
-    unstandardized = exponentiated*Y_std**2.0
-    al_sigma2 = np.mean(unstandardized, axis=0)
+    al_sigma2 = np.mean(np.exp(pred_logvar), axis=0)
     return al_sigma2
 
 def get_astrometric_error(mag, band, n_visits=184):

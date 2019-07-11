@@ -1,6 +1,17 @@
 import numpy as np
 import astropy.units as u
 
+def delta_flux(flux, delta_mag):
+    return np.log(10.0)/2.5*flux*delta_mag
+
+def delta_mag(mag, flux, delta_flux):
+    """
+    mag: ABmag
+    flux: Jy
+    delta_flux: Jy
+    """
+    return 2.5/np.log(10.0)*delta_flux/flux
+
 def nmgy_to_njy(from_flux, inv=False):
     nmgy_to_njy = 3613.0 # 1 nMgy = 3.613e-6 Jy = 3613 nJy
     if inv: # njy --> nmgy
