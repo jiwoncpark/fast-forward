@@ -206,25 +206,40 @@ def sample_from_lowrank(mu, var, F, n_sample):
     x += sig * z_diag
     return x
 
-def sample_from_analytic_model(mean, logvar, n_sample=1):
+def sample_from_analytic_model(mean, sigma, mean_class, sigma_class, data_meta, n_sample=1):
     """
     Draw sample output parameters from the analytic model sampling distribution. 
 
     Parameters
     ==========
-    mean: torch.tensor
+    mean: ndarray
         List of outout parameter sampling distribution means
-    logvar: torch.tensor
-        List of output parameter sampling distribution log variances
+    sigma: ndarray
+        List of output parameter sampling distribution sigmas
+    mean_class : ndarray
+        List of outout parameter classification confidence estimates
+    sigma_class : ndarray
+        List of outout parameter predicted errors on the classification confidence estimates
     n_sample: int
         Number of samples to draw, def=1
 
     Returns
     =======
     sample: ndarray, float
-
     """
-    return sample
+    import pandas as pd
+
+    Y_cols = data_meta['Y_cols']
+    n_obj, Y_dim = mean.shape
+    mean = pd.DataFrame(mean, columns=Y_cols)
+    sample = pd.DataFrame(columns=Y_cols)
+
+    for quantity in data_meta['Y_cols']:
+        if quantity in ['IxxPSF', 'IxyPSF', 'IyyPSF', 'extendedness']:
+            sample[quantity] = mean[quantity].values
+        else:
+            sample[quantity] = np.random.randn((n_obj,))*sigma[quantity] + mean[quantity]
+    return sample.values
 
 def l2_norm(pred):
     norm_per_data = np.linalg.norm(pred, axis=2) # shape [n_MC, n_data]

@@ -1,6 +1,11 @@
 import torch
 from torch import nn
+import mog_utils
+from uncertainty_utils import *
+import units_utils as units
 import numpy as np
+import pandas as pd
+import astropy.units as u
 
 class ConcreteDropout(nn.Module):
     def __init__(self, weight_regularizer=1e-6,
@@ -214,7 +219,8 @@ class ConcreteDenseMixture(nn.Module):
         return mean, logvar, F, mean2, logvar2, F2, alpha, mean_classifier, logvar_classifier, regularization.sum()
 
 
-class Analytic(nn.Module):
+class Analytic():
+
     """
     Painfully simple analytic astronomy model.  
 
@@ -235,9 +241,9 @@ class Analytic(nn.Module):
     vectors of means and sigmas, that can be passed to the appropriate sampling function. 
     """
     def __init__(self):
-        super(Analytic, self).__init__()
-               
-    def forward(self, x):
+        pass
+
+    def __call__(self, X, data_meta):
         """
         Predict output DRP quantities y given input truth properties x
 
@@ -248,11 +254,92 @@ class Analytic(nn.Module):
         
         Returns
         =======
-        mean: torch.tensor
+        mean: ndarray
             List of outout parameter sampling distribution means
-        logvar: torch.tensor
+        logvar: ndarray
             List of output parameter sampling distribution log variances
 
         """
-        return mean, logvar, mean_classifier, logvar_classifier
+        
+
+        X_cols = data_meta['X_cols']
+        Y_cols = data_meta['Y_cols']
+        scale_flux = data_meta['scale_flux']
+        X_std = np.array(data_meta['X_std']).reshape([1, -1])
+        X_mean = np.array(data_meta['X_mean']).reshape([1, -1])
+        X = X*X_std + X_mean
+        X = pd.DataFrame(X, columns=X_cols)
+        n_obj, X_dim = X.shape
+        mean = pd.DataFrame(columns=Y_cols)
+        sigma = pd.DataFrame(columns=Y_cols)
+
+        # Fluxes
+        mags = {}
+        photom_sig_flux = {}
+        fluxes = {}
+        for bp in 'ugrizy':
+            mean['psFlux_%s' %bp] = np.zeros((n_obj))
+            mean['cModelFlux_%s' %bp] = np.zeros((n_obj))
+            flux = X['%s_flux' %bp].values/scale_flux # Jy
+            fluxes[bp] = flux
+            mags[bp] = (flux * u.Jy).to_value(u.ABmag)
+            photom_sig = get_photometric_error(mags[bp], bp, '1.2i') # mag
+            photom_sig_flux[bp] = units.delta_flux(flux, photom_sig)
+            sigma['psFlux_%s' %bp] = photom_sig_flux[bp] # Jy
+            sigma['cModelFlux_%s' %bp] = photom_sig_flux[bp] # Jy
+
+        # Positions
+        astrom_sig = get_astrometric_error(mags['r'], 'r', n_visits=X['n_obs'].values)
+        mean['ra_offset'], mean['dec_offset'] = np.zeros((n_obj)), np.zeros((n_obj))
+        sigma['ra_offset'], sigma['dec_offset'] = astrom_sig, astrom_sig
+
+        # Shapes
+        # Format catalog with unit conversions and column renaming
+        hostgal_formatted = mog_utils._format_extragal_catalog(X, lensed_positions=False).reset_index(drop=True)
+        hostgal_formatted['galaxy_id'] = hostgal_formatted.index.values
+
+        # Separate galaxy catalog into bulge and disk --> params of 2 Sersics
+        bulge, disk, _ = mog_utils.separate_bulge_disk(hostgal_formatted)
+
+        # Deconstruct bulge/disk into MoG --> Params of 18 Gaussians
+        bulge_mog = mog_utils.sersic_to_mog(sersic_df=bulge, bulge_or_disk='bulge')
+        disk_mog = mog_utils.sersic_to_mog(sersic_df=disk, bulge_or_disk='disk')
+
+        # Concat bulge and disk MoGs
+        full_mog = pd.concat([bulge_mog, disk_mog], axis=0)
+
+        # Apply circular PSF
+        nominal_PSF = X['PSF_sigma2'].values**0.5 # fwhm in arcsec
+        nominal_PSF_sigma2 = units.fwhm_to_sigma(nominal_PSF)**2.0
+        full_mog['PSF_sigma2'] += nominal_PSF_sigma2
+
+        # Group by galaxy id, sum moments
+        mean['Ixx'] = full_mog.groupby(['galaxy_id'])['Ixx'].sum()
+        mean['Ixy'] = full_mog.groupby(['galaxy_id'])['Ixy'].sum()
+        mean['Iyy'] = full_mog.groupby(['galaxy_id'])['Iyy'].sum()
+        err_ratio_sq = 2.0*(photom_sig_flux['r']/fluxes['r'])**2.0 +\
+                       (astrom_sig/X['size_bulge_true'].values)**2.0 +\
+                       (astrom_sig/X['size_bulge_true'].values)**2.0
+        sigma['Ixx'] = mean['Ixx'].values * err_ratio_sq**0.5
+        sigma['Iyy'] = mean['Iyy'].values * err_ratio_sq**0.5
+        sigma['Ixy'] = mean['Ixy'].values * err_ratio_sq**0.5
+ 
+        # PSF moments
+        mean['IxxPSF'] = nominal_PSF_sigma2
+        mean['IyyPSF'] = nominal_PSF_sigma2
+        mean['IxyPSF'] = np.zeros((n_obj))
+        sigma['IxxPSF'] = np.zeros((n_obj))
+        sigma['IyyPSF'] = np.zeros((n_obj))
+        sigma['IxyPSF'] = np.zeros((n_obj))
+
+        # Extendedness
+        mean['extendedness'] = np.logical_not(X['star'].values)
+        sigma['extendedness'] = np.zeros((n_obj))
+
+        params = {
+        'mean': mean[Y_cols].values,
+        'sigma': sigma[Y_cols].values,
+        }
+
+        return params
 
