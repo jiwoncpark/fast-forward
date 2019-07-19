@@ -45,8 +45,11 @@ drp_cols += [t[1] + t[0] for t in list(itertools.product(drp_cols_suffix, list('
 
 
 # Define dataset
-data = DerpData(data_path='raw_data/obj_master_tract4850.csv', X_base_cols=truth_cols + opsim_cols, Y_base_cols=drp_cols, 
-                args=args, ignore_null_rows=True, save_to_disk=True)
+data = DerpData(data_path='raw_data/obj_master_tract4850.csv',
+    data_path2='raw_data/obj_master_tract5063.csv',
+    X_base_cols=truth_cols + opsim_cols, 
+    Y_base_cols=drp_cols, 
+    args=args, ignore_null_rows=True, save_to_disk=True)
 if not args['data_already_processed']:
     data.export_metadata_for_eval(device_type=device.type)
 # Read metadata if reading processed data from disk:
@@ -81,13 +84,18 @@ for batch_idx, (X_batch, Y_batch) in enumerate(val_loader):
 # Model #
 #########
 
-from models import ConcreteDense
+import models
 
 length_scale = args['l']
 n_train = len(train_indices)
 wr = length_scale**2.0/n_train
 dr = 2.0/n_train
-model = ConcreteDense(X_dim, Y_dim, args['n_features'], wr, dr).to(device)
+if args['cov_mat'] == 'diagonal':
+    model = models.ConcreteDense(X_dim, Y_dim, args['n_features'], wr, dr).to(device)
+elif args['cov_mat'] == 'low_rank':
+    model = models.ConcreteDenseLowRank(X_dim, Y_dim, args['n_features'], wr, dr).to(device)
+elif args['cov_mat'] == 'mixture':
+    model = models.ConcreteDenseMixture(X_dim, Y_dim, args['n_features'], wr, dr).to(device)
 
 print("Model's state_dict:")
 for param_tensor in model.state_dict():
@@ -103,7 +111,7 @@ from torch import optim
 X_val = data.X[val_indices, :]
 Y_val = data.Y[val_indices, :]
 optimizer = optim.Adam(params=model.parameters(), lr=args['lr'], amsgrad=True)
-lr_scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[400, 800, 1300, 1800, 2300, 2600, 2800, 3100, 3300, 3600, 3800, 4100, 4200, 4300, 4400], gamma=0.7)
+lr_scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[30, 260, 400, 800, 1300, 1800, 2300, 2600, 2800, 3100, 3300, 3600, 3800, 4100, 4200, 4300, 4400], gamma=0.7)
 checkpoint_path = None if args['checkpoint_path'] is False else args['checkpoint_path']
 
 model = fit_model(model, optimizer, lr_scheduler, train_loader, val_loader,
