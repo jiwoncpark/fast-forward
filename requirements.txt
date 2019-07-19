@@ -3,4 +3,5 @@
 astropy==3.0.3 # Later ones have weird unit conversion
 numpy>=1.16
 torch>=0.4 # Haven't tested GPU on 0.4, don't know driver requirement
-	   # But 1.1.0 works with both CPU/GPU
+           # But 1.1.0 works with both CPU/GPU
+tensorflow
