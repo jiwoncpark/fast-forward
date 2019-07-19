@@ -3,7 +3,6 @@ import numpy as np
 import torch
 from torch.autograd import Variable
 from torch.nn.utils import clip_grad_norm_
-import torch.nn as nn
 from logger import Logger # for tensorboard logging
 import plotting_utils as plotting
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
@@ -80,9 +79,9 @@ def fit_model(model, optimizer, lr_scheduler, train_loader, val_loader,
             X_batch = Variable(torch.FloatTensor(X_)).to(device)
             Y_batch = Variable(torch.FloatTensor(Y_)).to(device)
             
-            mean, logvar, mean_classifier, logvar_classifier, regularization = model(X_batch)
+            mean, logvar, F, mean2, logvar2, F2, alpha, mean_classifier, logvar_classifier, regularization = model(X_batch)
             # regression loss
-            loss = nll_loss_regress(Y_batch[:, 1:], mean, logvar) + regularization
+            loss = nll_loss_regress(Y_batch[:, 1:], mean, logvar, alpha=alpha, mean2=mean2, logvar2=logvar2, F=F, F2=F2, cov_mat=args['cov_mat'], device=device) + regularization
             # classification loss
             loss += nll_loss_classify(Y_batch[:, 0].view([-1, 1]), mean_classifier, logvar_classifier)
             
@@ -103,8 +102,8 @@ def fit_model(model, optimizer, lr_scheduler, train_loader, val_loader,
         if (epoch+1)%(args['logging_interval']) == 0:
             model.eval()
             with torch.no_grad():
-                means, logvars, means_class, logvars_class = mc_sample(model, X_val, Y_val, args['n_MC'], device)
-                pppp, rmse, mean_norm, logvar_norm = get_scalar_metrics(means, logvars, Y_val[:, 1:], args['n_MC'])
+                dropout_sample = mc_sample(model, X_val, Y_val, args['n_MC'], device, args['cov_mat'])
+                pppp, rmse, mean_norm, logvar_norm = get_scalar_metrics(dropout_sample['mean'], dropout_sample['logvar'], Y_val[:, 1:], args['n_MC'])
                 
                 print('Epoch [{}/{}],\
                 Loss: {:.4f}, PPPP: {:.2f}, RMSE: {:.4f}'.format(epoch+1, args['n_epochs'], epoch_loss, pppp, rmse))
@@ -122,29 +121,20 @@ def fit_model(model, optimizer, lr_scheduler, train_loader, val_loader,
                     logger.histo_summary(tag+'/grad', value.grad.data.cpu().numpy(), epoch+1)
 
                 # 3. Log training images (image summary)
-                mu = np.mean(means, axis=0)
-                al_sig2 = uncertain.get_aleatoric_sigma2(logvars)
-                ep_sig2 = uncertain.get_epistemic_sigma2(means)
-                
-                mu_class = np.mean(1.0 / (1.0 + np.exp(-means_class)), axis=0)
-                al_sig2_class = uncertain.get_aleatoric_sigma2(logvars_class)
-                ep_sig2_class = uncertain.get_epistemic_sigma2(means_class)
+                dropout_result = average_over_dropout(dropout_sample)
+                #sampled_result = sample_from_likelihood(dropout_result, n_sample=500)
+                #np.save('sample', sampled_result.reshape(Y_val.shape[0], 500*(Y_val.shape[1] - 1)))
+
                 # Convert to natural units
-                X_to_plot, Y_to_plot, em_to_plot = plotting.get_natural_units(X_val_sampled, Y_val_sampled,
-                    mu[val_sampled, :], al_sig2[val_sampled, :],
-                    ep_sig2[val_sampled, :], mu_class[val_sampled, :],
-                    al_sig2_class[val_sampled, :], ep_sig2_class[val_sampled, :],
-                    data_meta)
-                X_full, Y_full, em_full = plotting.get_natural_units(X_val, Y_val,
-                    mu, al_sig2, ep_sig2, mu_class, al_sig2_class, ep_sig2_class, data_meta)
+                X_nat, Y_nat, em_nat, em_nat_second = plotting.get_natural_units(X=X_val, Y=Y_val, meta=data_meta, **dropout_result)
 
                 # Get mapping plots
-                psFlux_mag = get_magnitude_plot(epoch+1, X_to_plot.loc[:200, :], Y_to_plot.loc[:200, :], em_to_plot.loc[:200, :], 'psFlux_%s', data_meta)
-                cModelFlux_mag = get_magnitude_plot(epoch+1, X_to_plot.loc[:200, :], Y_to_plot.loc[:200, :], em_to_plot.loc[:200, :], 'cModelFlux_%s', data_meta)
-                psFlux = get_flux_plot(epoch+1, X_to_plot, Y_to_plot, em_to_plot, 'psFlux_%s', data_meta)
-                cModelFlux = get_flux_plot(epoch+1, X_to_plot, Y_to_plot, em_to_plot, 'cModelFlux_%s', data_meta)
-                moments = get_moment_plot(epoch+1, X_to_plot, Y_to_plot, em_to_plot)
-                conf_mat = get_star_metrics(epoch+1, X_full, Y_full, em_full)
+                psFlux_mag = get_magnitude_plot(epoch+1, X_nat.loc[val_sampled[:200], :], Y_nat.loc[val_sampled[:200], :], em_nat.loc[val_sampled[:200], :], em_nat_second.loc[val_sampled[:200], :], 'psFlux_%s', data_meta)
+                cModelFlux_mag = get_magnitude_plot(epoch+1, X_nat.loc[val_sampled[:200], :], Y_nat.loc[val_sampled[:200], :], em_nat.loc[val_sampled[:200], :], em_nat_second.loc[val_sampled[:200], :], 'cModelFlux_%s', data_meta)
+                psFlux = get_flux_plot(epoch+1, X_nat.loc[val_sampled, :], Y_nat.loc[val_sampled, :], em_nat.loc[val_sampled, :], em_nat_second.loc[val_sampled, :], 'psFlux_%s', data_meta)
+                cModelFlux = get_flux_plot(epoch+1, X_nat.loc[val_sampled, :], Y_nat.loc[val_sampled, :], em_nat.loc[val_sampled, :], em_nat_second.loc[val_sampled, :], 'cModelFlux_%s', data_meta)
+                moments = get_moment_plot(epoch+1, X_nat.loc[val_sampled, :], Y_nat.loc[val_sampled, :], em_nat.loc[val_sampled, :], em_nat_second.loc[val_sampled, :])
+                conf_mat = get_star_metrics(epoch+1, X_nat, Y_nat, em_nat)
 
                 info = {
                 'psFlux_mapping (mag)': psFlux_mag,
@@ -164,79 +154,164 @@ def fit_model(model, optimizer, lr_scheduler, train_loader, val_loader,
 
     return model
 
-def get_star_metrics(epoch, X, Y, emulated):
-    my_dpi = 72.0
-    fig = Figure(figsize=(720/my_dpi, 360/my_dpi), dpi=my_dpi, tight_layout=True)
-    canvas = plotting.plot_confusion_matrix(fig, X, Y, emulated)
-    width, height = fig.get_size_inches() * fig.get_dpi()
-    conf_mat = np.frombuffer(canvas.tostring_rgb(), dtype='uint8').reshape(1, int(height), int(width), 3)
-    return conf_mat
+def average_over_dropout(dropout_sample):
+    # FIXME only works for mixture
+    dropout_result = OrderedDict(
+                    mu = np.mean(dropout_sample['mean'], axis=0),
+                    al_sig2 = uncertain.get_aleatoric_sigma2(dropout_sample['logvar']),
+                    ep_sig2 = uncertain.get_epistemic_sigma2(dropout_sample['mean']),
+                    F = np.mean(dropout_sample['F'], axis=0),
 
-def get_moment_plot(epoch, X, Y, emulated):
-    my_dpi = 72.0
-    per_filter = []
-    for moment_type in ['Ixx', 'Ixy', 'Iyy', 'IxxPSF', 'IxyPSF', 'IyyPSF', 'ra_offset', 'dec_offset']:
-        fig = Figure(figsize=(720/my_dpi, 360/my_dpi), dpi=my_dpi, tight_layout=True)
-        canvas = plotting.plot_moment(fig, X, Y, emulated, moment_type)
-        width, height = fig.get_size_inches() * fig.get_dpi()
-        img = np.frombuffer(canvas.tostring_rgb(), dtype='uint8').reshape(1, int(height), int(width), 3)
-        per_filter.append(img)
-    all_filters = np.concatenate(per_filter, axis=0)
-    #np.save('img_%d' %epoch, img)
-    return all_filters
+                    mu_second = np.mean(dropout_sample['mean2'], axis=0),
+                    al_sig2_second = uncertain.get_aleatoric_sigma2(dropout_sample['logvar2']),
+                    ep_sig2_second = uncertain.get_epistemic_sigma2(dropout_sample['mean2']),
+                    alpha = np.mean(dropout_sample['alpha'], axis=0),
+                    F2 = np.mean(dropout_sample['F2'], axis=0),
+                    
+                    mu_class = np.mean(sigmoid(dropout_sample['mean_class']), axis=0),
+                    al_sig2_class = uncertain.get_aleatoric_sigma2(dropout_sample['logvar_class']),
+                    ep_sig2_class = uncertain.get_epistemic_sigma2(dropout_sample['mean_class']),)
+    return dropout_result
 
-def get_flux_plot(epoch, X, Y, emulated, flux_formatting, data_meta):
-    my_dpi = 72.0
-    per_filter = []
-    for bp in 'ugrizy':
-        fig = Figure(figsize=(720/my_dpi, 360/my_dpi), dpi=my_dpi, tight_layout=True)
-        canvas = plotting.plot_flux(fig, X, Y, emulated, flux_formatting, bp)
-        width, height = fig.get_size_inches() * fig.get_dpi()
-        img = np.frombuffer(canvas.tostring_rgb(), dtype='uint8').reshape(1, int(height), int(width), 3)
-        per_filter.append(img)
-    all_filters = np.concatenate(per_filter, axis=0)
-    #np.save('img_%d' %epoch, img)
-    return all_filters
+def sigmoid(x):
+    return 1.0 / (1.0 + np.exp(-x))
 
-def get_magnitude_plot(epoch, X, Y, emulated, flux_formatting, data_meta):
-    my_dpi = 72.0
-    per_filter = []
-    for bp in 'ugrizy':
-        fig = Figure(figsize=(720/my_dpi, 360/my_dpi), dpi=my_dpi, tight_layout=True)
-        canvas = plotting.plot_magnitude(fig, X, Y, emulated, flux_formatting, bp)
-        width, height = fig.get_size_inches() * fig.get_dpi()
-        img = np.frombuffer(canvas.tostring_rgb(), dtype='uint8').reshape(1, int(height), int(width), 3)
-        per_filter.append(img)
-    all_filters = np.concatenate(per_filter, axis=0)
-    #np.save('img_%d' %epoch, img)
-    return all_filters
+def sample_from_likelihood(learned_params, n_sample):
+    # FIXME only works for mixture
+    n_obj, reg_dim = learned_params['mu'].shape
+    sample = np.full([n_obj, n_sample, reg_dim], np.nan) # initialize sample tensor
+    prob_second = 0.5*sigmoid(learned_params['alpha']).repeat(n_sample, axis=1) # [n_obj, n_sample]
+    unif = np.random.rand(n_obj, n_sample)
+    second_gaussian = (unif < prob_second)
+    first_gaussian = np.logical_not(second_gaussian)
+    first_sample = sample_from_lowrank(learned_params['mu'], learned_params['al_sig2'], learned_params['F'], n_sample)
+    sample[first_gaussian, :] = first_sample[first_gaussian, :]
+    second_sample = sample_from_lowrank(learned_params['mu_second'], learned_params['al_sig2_second'], learned_params['F2'], n_sample)
+    sample[second_gaussian, :] = second_sample[second_gaussian, :]
+    assert np.isnan(sample).any() == False # entire tensor should be populated
+    return sample
+
+def sample_from_lowrank(mu, var, F, n_sample):
+    # (24) in Miller et al 2016
+    n_obj, reg_dim = mu.shape
+    rank = 2 # FIXME
+    mu = mu.reshape([n_obj, 1, reg_dim])
+    sig = np.sqrt(var).reshape([n_obj, 1, reg_dim])
+    F = np.expand_dims(F.reshape(n_obj, reg_dim, rank), axis=1) # [n_obj, 1, reg_dim, rank]
+    z_lowrank = np.random.randn(n_obj, n_sample, 1, rank)
+    z_diag = np.random.randn(n_obj, n_sample, reg_dim)
+    
+    x = np.sum(F*z_lowrank, axis=3) # [n_obj, n_sample, reg_dim]
+    x += mu
+    x += sig * z_diag
+    return x
 
 def l2_norm(pred):
     norm_per_data = np.linalg.norm(pred, axis=2) # shape [n_MC, n_data]
     return np.mean(norm_per_data)
 
-def nll_loss_regress(true, mean, log_var):
-    precision = torch.exp(-log_var)
-    return torch.mean(torch.sum(precision * (true - mean)**2.0 + log_var, dim=1), dim=0)
+def nll_loss_regress(true, mean, logvar, device, F=None, mean2=None, logvar2=None, F2=None, alpha=None, cov_mat='low_rank'):
+    if cov_mat == 'diagonal':
+        nll_loss_diagonal(true, mean, logvar)
+    elif cov_mat == 'low_rank':
+        return nll_loss_lowrank(true, mean, logvar, device, F)
+    elif cov_mat == 'mixture':
+        batch_size, _ = mean.shape
+        rank = 2 #FIXME
+        log_nll = torch.empty([batch_size, rank], device=device)
+        logsigmoid = torch.nn.LogSigmoid()
+        # FIXME rank hardcode
+        alpha = alpha.reshape(-1)
+        log_nll[:, 0] = torch.log(torch.tensor([0.5], device=device)) + logsigmoid(-alpha) + nll_loss_lowrank(true, mean, logvar, device=device, F=F, reduce=False) # [batch_size]
+        log_nll[:, 1] = torch.log(torch.tensor([0.5], device=device)) + logsigmoid(alpha) + nll_loss_lowrank(true, mean2, logvar2, device=device, F=F2, reduce=False) # [batch_size]
+        sum_two_gaus = torch.logsumexp(log_nll, dim=1) 
+        return torch.mean(sum_two_gaus)
 
-def nll_loss_classify(true, mean, log_var):
-    #precision = torch.exp(-log_var)
-    #return torch.mean(torch.sum(precision * (true - mean)**2.0 + log_var, dim=1), dim=0)
-    loss = nn.BCEWithLogitsLoss()
+def nll_loss_diagonal(true, mean, logvar):
+    precision = torch.exp(-logvar)
+    return torch.mean(torch.sum(precision * (true - mean)**2.0 + logvar, dim=1), dim=0)
+
+def nll_loss_lowrank(true, mean, logvar, device, F=None, reduce=True):
+    # 1/(Y_dim - 1) * (sq_mahalanobis + log(det of \Sigma))
+    batch_size, reg_dim = mean.shape # reg_dim = Y_dim - 1
+    rank = 2
+    F = F.reshape([batch_size, reg_dim, rank]) # FIXME: hardcoded for rank 2
+    inv_var = torch.exp(-logvar) # [batch_size, reg_dim]
+    diag_inv_var = torch.diag_embed(inv_var)  # [batch_size, reg_dim, reg_dim]
+    diag_prod = F**2.0 * inv_var.reshape([batch_size, reg_dim, 1]) # [batch_size, reg_dim, rank] after broadcasting
+    off_diag_prod = torch.prod(F, dim=2)*inv_var # [batch_size, reg_dim]
+    #batchdiag = torch.diag_embed(torch.exp(logvar)) # [batch_size, reg_dim, reg_dim]
+    #batch_eye = torch.eye(rank).reshape(1, rank, rank).repeat(batch_size, 1, 1) # [batch_size, rank, rank]
+    #assert batchdiag.shape == torch.Size([batch_size, reg_dim, reg_dim])
+
+    # (25), (26) in Miller et al 2016
+    log_det = torch.sum(logvar, dim=1) # [batch_size]
+    M00 = torch.sum(diag_prod[:, :, 0], dim=1) + 1.0 # [batch_size]
+    M11 = torch.sum(diag_prod[:, :, 1], dim=1) + 1.0 # [batch_size]
+    M12 = torch.sum(off_diag_prod, dim=1) # [batch_size]
+    assert M00.shape == torch.Size([batch_size])
+    assert M12.shape == torch.Size([batch_size])
+    det_M = M00*M11 - M12**2.0 # [batch_size]
+    assert det_M.shape == torch.Size([batch_size])
+    assert log_det.shape == torch.Size([batch_size])
+    log_det += torch.log(det_M) 
+    assert log_det.shape == torch.Size([batch_size])
+    #print(det_M)
+
+    inv_M = torch.ones([batch_size, rank, rank], device=device)
+    inv_M[:, 0, 0] = M11
+    inv_M[:, 1, 1] = M00
+    inv_M[:, 1, 0] = -M12
+    inv_M[:, 0, 1] = -M12
+    inv_M /= det_M.reshape(batch_size, 1, 1)
+
+    # (27) in Miller et al 2016
+    inv_cov = diag_inv_var - torch.bmm(torch.bmm(torch.bmm(torch.bmm(diag_inv_var, F), inv_M), torch.transpose(F, 1, 2)), diag_inv_var) 
+    assert inv_cov.shape == torch.Size([batch_size, reg_dim, reg_dim])
+    sq_mahalanobis = torch.squeeze(torch.bmm(torch.bmm((mean - true).reshape(batch_size, 1, reg_dim), inv_cov), (mean - true).reshape(batch_size, reg_dim, 1)))
+    assert sq_mahalanobis.shape == torch.Size([batch_size])
+
+    if reduce==True:
+        return torch.mean(sq_mahalanobis + log_det, dim=0)
+    else:
+        return sq_mahalanobis + log_det
+
+def nll_loss_classify(true, mean, logvar):
+    #precision = torch.exp(-logvar)
+    #return torch.mean(torch.sum(precision * (true - mean)**2.0 + logvar, dim=1), dim=0)
+    loss = torch.nn.BCEWithLogitsLoss()
     return loss(mean, true)
 
 def logsumexp(a):
     a_max = a.max(axis=0)
     return np.log(np.sum(np.exp(a - a_max), axis=0)) + a_max
 
-def mc_sample(model, X_val, Y_val, n_MC, device):
+def mc_sample(model, X_val, Y_val, n_MC, device, cov_mat):
     n_val, Y_dim = Y_val.shape
+    rank = 2 # FIXME
     MC_samples = [model(Variable(torch.FloatTensor(X_val)).to(device)) for _ in range(n_MC)] # shape [K, N, 2D]
-    means = torch.stack([tup[0] for tup in MC_samples]).view(n_MC, n_val, Y_dim - 1).cpu().data.numpy()
-    logvars = torch.stack([tup[1] for tup in MC_samples]).view(n_MC, n_val, Y_dim - 1).cpu().data.numpy()
-    means_class = torch.stack([tup[2] for tup in MC_samples]).view(n_MC, n_val, 1).cpu().data.numpy()
-    logvars_class = torch.stack([tup[3] for tup in MC_samples]).view(n_MC, n_val, 1).cpu().data.numpy()
-    return means, logvars, means_class, logvars_class
+    # FIXME: very inefficient tuple of tuples...
+    dropout_sample = OrderedDict(mean = torch.stack([tup[0] for tup in MC_samples]).view(n_MC, n_val, Y_dim - 1).cpu().data.numpy(),
+                            logvar = torch.stack([tup[1] for tup in MC_samples]).view(n_MC, n_val, Y_dim - 1).cpu().data.numpy(),
+                            mean_class = torch.stack([tup[7] for tup in MC_samples]).view(n_MC, n_val, 1).cpu().data.numpy(),
+                            logvar_class = torch.stack([tup[8] for tup in MC_samples]).view(n_MC, n_val, 1).cpu().data.numpy(),
+                            F = None,
+                            mean2 = None,
+                            logvar2 = None,
+                            F2 = None,
+                            alpha = None,)
+    if cov_mat == 'diagonal':
+        return dropout_sample
+    elif cov_mat=='low_rank':
+        dropout_sample['F'] = torch.stack([tup[2] for tup in MC_samples]).view(n_MC, n_val, (Y_dim - 1)*rank).cpu().data.numpy()
+        return dropout_sample
+    elif cov_mat == 'mixture':
+        dropout_sample['F'] = torch.stack([tup[2] for tup in MC_samples]).view(n_MC, n_val, (Y_dim - 1)*rank).cpu().data.numpy()
+        dropout_sample['mean2'] = torch.stack([tup[3] for tup in MC_samples]).view(n_MC, n_val, Y_dim - 1).cpu().data.numpy()
+        dropout_sample['logvar2'] = torch.stack([tup[4] for tup in MC_samples]).view(n_MC, n_val, Y_dim - 1).cpu().data.numpy()
+        dropout_sample['F2'] = torch.stack([tup[5] for tup in MC_samples]).view(n_MC, n_val, (Y_dim - 1)*rank).cpu().data.numpy()
+        dropout_sample['alpha'] = torch.stack([tup[6] for tup in MC_samples]).view(n_MC, n_val, 1).cpu().data.numpy()
+        return dropout_sample
 
 def get_scalar_metrics(means, logvar, Y_val, n_MC):
     """
@@ -261,6 +336,62 @@ def get_scalar_metrics(means, logvar, Y_val, n_MC):
     # root mean-squared error
     rmse = np.mean( (np.mean(means, axis=0) - Y_val.squeeze())**2.0 )
     return pppp, rmse, l2_norm(means), l2_norm(logvar)
+
+def get_star_metrics(epoch, X, Y, emulated):
+    my_dpi = 72.0
+    fig = Figure(figsize=(720/my_dpi, 360/my_dpi), dpi=my_dpi, tight_layout=True)
+    canvas = plotting.plot_confusion_matrix(fig, X, Y, emulated)
+    width, height = fig.get_size_inches() * fig.get_dpi()
+    conf_mat = np.frombuffer(canvas.tostring_rgb(), dtype='uint8').reshape(1, int(height), int(width), 3)
+    return conf_mat
+
+def get_moment_plot(epoch, X, Y, emulated, emulated_second):
+    my_dpi = 72.0
+    per_filter = []
+    for moment_type in ['Ixx', 'Ixy', 'Iyy', 'IxxPSF', 'IxyPSF', 'IyyPSF', 'ra_offset', 'dec_offset']:
+        fig = Figure(figsize=(720/my_dpi, 360/my_dpi), dpi=my_dpi, tight_layout=True)
+        canvas = plotting.plot_moment(fig, X, Y, emulated, emulated_second, moment_type)
+        width, height = fig.get_size_inches() * fig.get_dpi()
+        img = np.frombuffer(canvas.tostring_rgb(), dtype='uint8').reshape(1, int(height), int(width), 3)
+        per_filter.append(img)
+    all_filters = np.concatenate(per_filter, axis=0)
+    #np.save('img_%d' %epoch, img)
+    return all_filters
+
+def get_flux_plot(epoch, X, Y, emulated, emulated_second, flux_formatting, data_meta):
+    my_dpi = 72.0
+    per_filter = []
+    for bp in 'ugrizy':
+        fig = Figure(figsize=(720/my_dpi, 360/my_dpi), dpi=my_dpi, tight_layout=True)
+        canvas = plotting.plot_flux(fig, X, Y, emulated, emulated_second, flux_formatting, bp)
+        width, height = fig.get_size_inches() * fig.get_dpi()
+        img = np.frombuffer(canvas.tostring_rgb(), dtype='uint8').reshape(1, int(height), int(width), 3)
+        per_filter.append(img)
+    all_filters = np.concatenate(per_filter, axis=0)
+    #np.save('img_%d' %epoch, img)
+    return all_filters
+
+def get_magnitude_plot(epoch, X, Y, emulated, emulated_second, flux_formatting, data_meta):
+    my_dpi = 72.0
+    per_filter = []
+    for bp in 'ugrizy':
+        fig = Figure(figsize=(720/my_dpi, 360/my_dpi), dpi=my_dpi, tight_layout=True)
+        canvas = plotting.plot_magnitude(fig, X, Y, emulated, emulated_second, flux_formatting, bp)
+        width, height = fig.get_size_inches() * fig.get_dpi()
+        img = np.frombuffer(canvas.tostring_rgb(), dtype='uint8').reshape(1, int(height), int(width), 3)
+        per_filter.append(img)
+    all_filters = np.concatenate(per_filter, axis=0)
+    #np.save('img_%d' %epoch, img)
+    return all_filters
+
+def get_sample_cornerplot(Y_nat, sampled_result):
+    n_obj, n_sample, reg_dim = sampled_result.shape
+    my_dpi = 72.0
+    fig = Figure(figsize=(720/my_dpi, 360/my_dpi), dpi=my_dpi, tight_layout=True)
+    canvas = plotting.plot_sample_corner(fig, X, Y, emulated, flux_formatting, bp)
+    width, height = fig.get_size_inches() * fig.get_dpi()
+    img = np.frombuffer(canvas.tostring_rgb(), dtype='uint8').reshape(1, int(height), int(width), 3)
+    return img
 
 if __name__ == '__main__':
     pass
