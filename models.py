@@ -212,3 +212,47 @@ class ConcreteDenseMixture(nn.Module):
         logvar_classifier, regularization[11] = self.conc_drop_logvar_classifier(x3, self.linear4_logvar_classifier) # ~ [batch, 1]
 
         return mean, logvar, F, mean2, logvar2, F2, alpha, mean_classifier, logvar_classifier, regularization.sum()
+
+
+class Analytic(nn.Module):
+    """
+    Painfully simple analytic astronomy model.  
+
+    For positions:
+        output ra, dec = input ra, dec + eps, eps ~ N(0, astrom^2)
+    For both cModel flux and psFlux:
+         output flux = input flux + eps, eps ~ N(0, sigma^2) where sigma = photometric noise from Javi's map
+    For extendedness:
+         output extendedness = not star
+         Better would be to check for average psf > size
+    For shapes:
+        Ixx, Ixy, Iyy (SLRealized, copy and comment FIXME). 
+        Propagate flux and position errors into sigma
+    For PSF moments:
+        Ixy = 0, Ixx, Iyy from PSF sigma. Zero uncertainty... 
+
+    The forward method produces a model Gaussian sampling distribution characterized by 
+    vectors of means and sigmas, that can be passed to the appropriate sampling function. 
+    """
+    def __init__(self):
+        super(Analytic, self).__init__()
+               
+    def forward(self, x):
+        """
+        Predict output DRP quantities y given input truth properties x
+
+        Parameters
+        ==========
+        x: torch.tensor
+            Input parameters
+        
+        Returns
+        =======
+        mean: torch.tensor
+            List of outout parameter sampling distribution means
+        logvar: torch.tensor
+            List of output parameter sampling distribution log variances
+
+        """
+        return mean, logvar, mean_classifier, logvar_classifier
+

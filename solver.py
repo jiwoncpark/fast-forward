@@ -206,6 +206,26 @@ def sample_from_lowrank(mu, var, F, n_sample):
     x += sig * z_diag
     return x
 
+def sample_from_analytic_model(mean, logvar, n_sample=1):
+    """
+    Draw sample output parameters from the analytic model sampling distribution. 
+
+    Parameters
+    ==========
+    mean: torch.tensor
+        List of outout parameter sampling distribution means
+    logvar: torch.tensor
+        List of output parameter sampling distribution log variances
+    n_sample: int
+        Number of samples to draw, def=1
+
+    Returns
+    =======
+    sample: ndarray, float
+
+    """
+    return sample
+
 def l2_norm(pred):
     norm_per_data = np.linalg.norm(pred, axis=2) # shape [n_MC, n_data]
     return np.mean(norm_per_data)
