@@ -44,15 +44,13 @@ class DerpData(Dataset):
             self.X_col_map = OrderedDict(zip(self.X_base_cols, self.X_base_cols)) # same by default
             self.Y_col_map = OrderedDict(zip(self.Y_base_cols, self.Y_base_cols))
             
-            XY0 = pd.read_csv(data_path, index_col=None)
-            XY_list = [XY0]
-            cols = XY0.columns.values
+            XY = pd.read_csv(data_path, index_col=None)
+            XY_list = [XY]
+            cols = XY.columns.values
             if data_path2 is not None:
                 XY_list.append(pd.read_csv(data_path2, index_col=None)[cols])
-            XY = pd.concat(XY_list, axis=0).reset_index(drop=True)
+                XY = pd.concat(XY_list, axis=0).reset_index(drop=True)
             XY = XY.sample(frac=1, random_state=123).reset_index(drop=True)
-            assert XY.shape[0] == XY1.shape[0] + XY2.shape[0]
-            assert XY.shape[1] == XY1.shape[1]
             self.X = XY[self.X_base_cols]
             self.Y = XY[self.Y_base_cols]
 
